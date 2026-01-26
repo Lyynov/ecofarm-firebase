@@ -1,0 +1,586 @@
+/*
+ * ESP32 NUTRIENT CONTROL SYSTEM - NODE (IMPROVED)
+ * Fuzzy Logic Controller + Gateway Communication
+ * Features: Auto/Manual Mode, PPM Control, pH Monitoring Only
+ * 
+ * IMPROVEMENTS:
+ * - ArduinoJson v6 & v7 compatibility
+ * - Better WiFi reconnection handling
+ * - Gateway health check & fallback
+ * - EEPROM config persistence
+ * - Improved error handling
+ */
+
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+#include <Preferences.h>
+#include "GravityTDS.h"
+
+// ===== WIFI & GATEWAY CONFIG =====
+const char* ssid = "smk unnes semarang"; 
+const char* password = "12345678";  
+const char* gatewayIP = "192.168.137.240";  // Static IP Gateway
+const int gatewayPort = 8080;
+const int nodeID = 3;  // Node ID (1-4) - UBAH UNTUK SETIAP NODE
+
+// ===== PIN CONFIGURATION =====
+const int PUMP_NUTRISI_A_PIN = 12;
+const int PUMP_NUTRISI_B_PIN = 14;
+const int TDS_SENSOR_PIN = 35;
+const int PH_SENSOR_PIN = 34;
+
+// ===== RELAY CONFIGURATION =====
+const bool RELAY_ACTIVE_LOW = true;
+
+// ===== CONTROL PARAMETERS =====
+float setpointPPM = 800.0;          // Default - akan diambil dari EEPROM
+bool isAutoMode = true;
+bool manualPumpCommand = false;
+
+// ===== FUZZY LOGIC PARAMETERS =====
+const float ERR_LOW = 10.0;
+const float ERR_MED = 30.0;
+const float ERR_HIGH = 60.0;
+
+const unsigned long DUR_FAST = 1000;
+const unsigned long DUR_MED = 3000;
+const unsigned long DUR_LONG = 7000;
+const unsigned long DUR_VERY_LONG = 12000;
+
+struct FuzzyMembership { 
+  float fast, medium, long_dur, very_long; 
+};
+
+// ===== SENSOR VARIABLES =====
+GravityTDS gravityTds;
+float sensorPPM = 0.0;
+float sensorPH = 7.0;
+
+// ===== PUMP CONTROL STATE =====
+bool pumpRunning = false;
+unsigned long pumpStartTime = 0;
+unsigned long pumpDuration = 0;
+
+// ===== HOMOGENIZATION STATE =====
+bool waitingMix = false;
+unsigned long mixStartTime = 0;
+const unsigned long MIX_DELAY = 15000;
+
+// ===== TDS SMOOTHING BUFFER =====
+#define BUFFER_SIZE 7
+float tdsBuffer[BUFFER_SIZE];
+int bufferIndex = 0;
+bool bufferReady = false;
+
+// ===== TIMING VARIABLES =====
+unsigned long lastSensorRead = 0;
+unsigned long lastGatewaySync = 0;
+unsigned long lastSerialPrint = 0;
+unsigned long lastWiFiCheck = 0;
+unsigned long lastConfigSave = 0;
+
+const unsigned long SENSOR_INTERVAL = 1000;
+const unsigned long GATEWAY_INTERVAL = 2000;
+const unsigned long PRINT_INTERVAL = 2000;
+const unsigned long WIFI_CHECK_INTERVAL = 5000;
+const unsigned long CONFIG_SAVE_INTERVAL = 60000;  // Save config tiap 1 menit jika ada perubahan
+
+// ===== CONNECTION STATUS =====
+bool gatewayOnline = false;
+unsigned long lastSuccessSync = 0;
+int syncFailCount = 0;
+const int MAX_SYNC_FAILS = 10;  // Fallback ke standalone setelah 10x gagal
+
+// ===== EEPROM STORAGE =====
+Preferences preferences;
+bool configChanged = false;
+
+// =====================================================
+// EEPROM FUNCTIONS
+// =====================================================
+void loadConfig() {
+  preferences.begin("node-config", false);
+  
+  if (preferences.isKey("setpoint")) {
+    setpointPPM = preferences.getFloat("setpoint", 800.0);
+    Serial.printf("[CONFIG] Loaded setpoint: %.1f ppm\n", setpointPPM);
+  } else {
+    // First time - save default
+    preferences.putFloat("setpoint", setpointPPM);
+    Serial.println("[CONFIG] Initialized with default setpoint: 800 ppm");
+  }
+  
+  preferences.end();
+}
+
+void saveConfig() {
+  if (!configChanged) return;
+  
+  preferences.begin("node-config", false);
+  preferences.putFloat("setpoint", setpointPPM);
+  preferences.end();
+  
+  configChanged = false;
+  Serial.printf("[CONFIG] Saved setpoint: %.1f ppm\n", setpointPPM);
+}
+
+// =====================================================
+// RELAY CONTROL FUNCTIONS
+// =====================================================
+void setPump(bool state) {
+  bool outputLevel = RELAY_ACTIVE_LOW ? !state : state;
+  digitalWrite(PUMP_NUTRISI_A_PIN, outputLevel);
+  digitalWrite(PUMP_NUTRISI_B_PIN, outputLevel);
+}
+
+void turnPumpOn() {
+  setPump(true);
+  pumpRunning = true;
+}
+
+void turnPumpOff() {
+  setPump(false);
+  pumpRunning = false;
+}
+
+// =====================================================
+// SENSOR READING FUNCTIONS
+// =====================================================
+void readSensors() {
+  // === READ TDS SENSOR (PPM) ===
+  int rawADC = analogRead(TDS_SENSOR_PIN);
+  float voltage = rawADC * (3.3 / 4095.0);
+  
+  gravityTds.setTemperature(25.0);
+  gravityTds.update();
+  float tdsValue = gravityTds.getTdsValue();
+
+  if (tdsValue < 1.0 && voltage > 0.1) {
+    tdsValue = (133.42 * pow(voltage, 3) - 255.86 * pow(voltage, 2) + 857.39 * voltage) * 0.5;
+  }
+  if (isnan(tdsValue) || tdsValue < 0) tdsValue = 0;
+
+  // Moving Average Filter
+  tdsBuffer[bufferIndex] = tdsValue;
+  bufferIndex = (bufferIndex + 1) % BUFFER_SIZE;
+  if (bufferIndex == 0) bufferReady = true;
+  
+  float sum = 0;
+  int count = bufferReady ? BUFFER_SIZE : bufferIndex;
+  for(int i = 0; i < count; i++) {
+    sum += tdsBuffer[i];
+  }
+  sensorPPM = (count > 0) ? (sum / count) : 0;
+
+  // === READ PH SENSOR (MONITORING ONLY) ===
+  int rawPH = analogRead(PH_SENSOR_PIN);
+  float voltagePH = rawPH * (3.3 / 4095.0);
+  sensorPH = 7.0 - ((voltagePH - 2.5) / 0.18);
+  
+  if (sensorPH < 0) sensorPH = 0;
+  if (sensorPH > 14) sensorPH = 14;
+}
+
+// =====================================================
+// FUZZY LOGIC ENGINE
+// =====================================================
+FuzzyMembership calculateFuzzyMembership(float errorPercent) {
+  FuzzyMembership membership = {0, 0, 0, 0};
+  
+  if (errorPercent <= ERR_LOW) {
+    membership.fast = 1.0;
+  } 
+  else if (errorPercent <= ERR_MED) {
+    membership.medium = (errorPercent - ERR_LOW) / (ERR_MED - ERR_LOW);
+    membership.fast = 1.0 - membership.medium;
+  } 
+  else if (errorPercent <= ERR_HIGH) {
+    membership.long_dur = (errorPercent - ERR_MED) / (ERR_HIGH - ERR_MED);
+    membership.medium = 1.0 - membership.long_dur;
+  } 
+  else {
+    membership.very_long = 1.0;
+  }
+  
+  return membership;
+}
+
+unsigned long defuzzifyDuration(FuzzyMembership m) {
+  float numerator = (m.fast * DUR_FAST) + 
+                    (m.medium * DUR_MED) + 
+                    (m.long_dur * DUR_LONG) + 
+                    (m.very_long * DUR_VERY_LONG);
+  
+  float denominator = m.fast + m.medium + m.long_dur + m.very_long;
+  
+  if (denominator == 0) return DUR_MED;
+  
+  return (unsigned long)(numerator / denominator);
+}
+
+// =====================================================
+// CONTROL LOGIC
+// =====================================================
+void executeControl() {
+  unsigned long now = millis();
+
+  // === MODE MANUAL (OPENLOOP) ===
+  if (!isAutoMode) {
+    pumpRunning = false;
+    waitingMix = false;
+    setPump(manualPumpCommand);
+    return;
+  }
+
+  // === MODE AUTO (CLOSELOOP - FUZZY LOGIC) ===
+  
+  if (pumpRunning) {
+    if (now - pumpStartTime >= pumpDuration) {
+      turnPumpOff();
+      waitingMix = true;
+      mixStartTime = now;
+    }
+    return;
+  }
+
+  if (waitingMix) {
+    if (now - mixStartTime >= MIX_DELAY) {
+      waitingMix = false;
+    }
+    return;
+  }
+
+  // === FUZZY CONTROL DECISION ===
+  if (sensorPPM < setpointPPM && sensorPPM > 10.0) {
+    float errorPct = ((setpointPPM - sensorPPM) / setpointPPM) * 100.0;
+    
+    FuzzyMembership fuzzyMembership = calculateFuzzyMembership(errorPct);
+    pumpDuration = defuzzifyDuration(fuzzyMembership);
+    
+    pumpStartTime = now;
+    turnPumpOn();
+  }
+}
+
+// =====================================================
+// GATEWAY COMMUNICATION (HTTP POST)
+// =====================================================
+void syncWithGateway() {
+  if (WiFi.status() != WL_CONNECTED) {
+    gatewayOnline = false;
+    return;
+  }
+
+  HTTPClient http;
+  String url = "http://" + String(gatewayIP) + ":" + String(gatewayPort) + "/api/node/sync";
+  
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  http.setTimeout(3000);
+
+  // ===== PREPARE DATA SENSOR =====
+  // Support both ArduinoJson v6 & v7
+  #if ARDUINOJSON_VERSION_MAJOR >= 7
+    JsonDocument jsonDoc;
+  #else
+    DynamicJsonDocument jsonDoc(512);
+  #endif
+  
+  jsonDoc["node_id"] = nodeID;
+  jsonDoc["ppm"] = round(sensorPPM * 10) / 10.0;
+  jsonDoc["ph"] = round(sensorPH * 100) / 100.0;
+  jsonDoc["pump_active"] = pumpRunning || (manualPumpCommand && !isAutoMode);
+  jsonDoc["mode"] = isAutoMode ? "AUTO" : "MANUAL";
+  jsonDoc["setpoint"] = setpointPPM;
+  
+  String jsonPayload;
+  serializeJson(jsonDoc, jsonPayload);
+
+  // ===== POST KE GATEWAY =====
+  int httpResponseCode = http.POST(jsonPayload);
+  
+  if (httpResponseCode == 200) {
+    gatewayOnline = true;
+    lastSuccessSync = millis();
+    syncFailCount = 0;
+    
+    // ===== TERIMA RESPONSE DARI GATEWAY =====
+    String response = http.getString();
+    
+    #if ARDUINOJSON_VERSION_MAJOR >= 7
+      JsonDocument responseDoc;
+    #else
+      DynamicJsonDocument responseDoc(512);
+    #endif
+    
+    DeserializationError error = deserializeJson(responseDoc, response);
+    
+    if (!error) {
+      // Update setpoint dari gateway
+      if (responseDoc.containsKey("setpoint")) {
+        float newSetpoint = responseDoc["setpoint"];
+        if (newSetpoint >= 200 && newSetpoint <= 2000) {
+          if (abs(newSetpoint - setpointPPM) > 1.0) {
+            Serial.printf("[GATEWAY] Setpoint updated: %.1f -> %.1f ppm\n", setpointPPM, newSetpoint);
+            setpointPPM = newSetpoint;
+            configChanged = true;  // Mark untuk disave ke EEPROM
+          }
+        }
+      }
+      
+      // Update mode (auto/manual)
+      if (responseDoc.containsKey("mode")) {
+        String mode = responseDoc["mode"].as<String>();
+        bool newMode = (mode == "AUTO");
+        if (newMode != isAutoMode) {
+          Serial.printf("[GATEWAY] Mode changed: %s -> %s\n", 
+                        isAutoMode ? "AUTO" : "MANUAL", 
+                        newMode ? "AUTO" : "MANUAL");
+          isAutoMode = newMode;
+        }
+      }
+      
+      // Update manual pump command
+      if (responseDoc.containsKey("manual_pump")) {
+        bool newPumpCmd = responseDoc["manual_pump"];
+        if (newPumpCmd != manualPumpCommand) {
+          Serial.printf("[GATEWAY] Manual pump command: %s -> %s\n", 
+                        manualPumpCommand ? "ON" : "OFF", 
+                        newPumpCmd ? "ON" : "OFF");
+          manualPumpCommand = newPumpCmd;
+        }
+      }
+    }
+  } else {
+    gatewayOnline = false;
+    syncFailCount++;
+    
+    // Fallback ke standalone mode jika gateway offline lama
+    if (syncFailCount >= MAX_SYNC_FAILS && !isAutoMode) {
+      Serial.println("[GATEWAY] Too many failures - forcing AUTO mode for safety");
+      isAutoMode = true;
+      manualPumpCommand = false;
+    }
+    
+    if (syncFailCount % 5 == 0) {
+      Serial.printf("[GATEWAY] Sync failed (%d): Code %d\n", syncFailCount, httpResponseCode);
+    }
+  }
+  
+  http.end();
+}
+
+// =====================================================
+// WIFI MANAGEMENT
+// =====================================================
+void checkWiFiConnection() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[WiFi] Connection lost - attempting reconnect...");
+    WiFi.disconnect();
+    WiFi.begin(ssid, password);
+    
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+      delay(500);
+      Serial.print(".");
+      attempts++;
+    }
+    
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("\n[WiFi] ✅ Reconnected!");
+      Serial.printf("  IP: %s\n", WiFi.localIP().toString().c_str());
+    } else {
+      Serial.println("\n[WiFi] ❌ Reconnection failed");
+    }
+  }
+}
+
+// =====================================================
+// SERIAL MONITORING
+// =====================================================
+void printStatus() {
+  unsigned long now = millis();
+  
+  Serial.println("===============================================");
+  
+  // === SENSOR DATA ===
+  Serial.print("[SENSOR]  PPM: ");
+  Serial.print(sensorPPM, 1);
+  Serial.print(" ppm | pH: ");
+  Serial.print(sensorPH, 2);
+  Serial.print(" | Setpoint: ");
+  Serial.print(setpointPPM, 0);
+  Serial.println(" ppm");
+  
+  // === GATEWAY STATUS ===
+  Serial.print("[GATEWAY] ");
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi Disconnected");
+  } else if (gatewayOnline) {
+    int secAgo = (now - lastSuccessSync) / 1000;
+    Serial.print("ONLINE (");
+    Serial.print(gatewayIP);
+    Serial.print(":");
+    Serial.print(gatewayPort);
+    Serial.print(") - Last sync: ");
+    Serial.print(secAgo);
+    Serial.println("s ago");
+  } else {
+    Serial.print("OFFLINE - Cannot reach ");
+    Serial.print(gatewayIP);
+    Serial.print(":");
+    Serial.print(gatewayPort);
+    Serial.print(" (Fails: ");
+    Serial.print(syncFailCount);
+    Serial.println(")");
+  }
+  
+  // === MODE & OPERATION STATUS ===
+  Serial.print("[MODE]    ");
+  Serial.print(isAutoMode ? "AUTO (Fuzzy)" : "MANUAL (Gateway)");
+  
+  Serial.print(" | Status: ");
+  if (pumpRunning) {
+    int elapsed = (now - pumpStartTime) / 1000;
+    int total = pumpDuration / 1000;
+    Serial.print("PUMPING (");
+    Serial.print(elapsed);
+    Serial.print("/");
+    Serial.print(total);
+    Serial.println("s)");
+  } 
+  else if (waitingMix) {
+    int remaining = (MIX_DELAY - (now - mixStartTime)) / 1000;
+    Serial.print("MIXING (");
+    Serial.print(remaining);
+    Serial.println("s left)");
+  } 
+  else if (!isAutoMode && manualPumpCommand) {
+    Serial.println("PUMP ON (Manual)");
+  }
+  else {
+    Serial.println("STANDBY");
+  }
+  
+  Serial.println("===============================================\n");
+}
+
+// =====================================================
+// SETUP
+// =====================================================
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  
+  Serial.println("\n===============================================");
+  Serial.println("   ESP32 NUTRIENT CONTROL - NODE v2.0");
+  Serial.println("   pH: Monitor | PPM: Fuzzy Control");
+  Serial.println("===============================================");
+  
+  // === LOAD CONFIG FROM EEPROM ===
+  loadConfig();
+  
+  // === SETUP PINS ===
+  pinMode(PUMP_NUTRISI_A_PIN, OUTPUT);
+  pinMode(PUMP_NUTRISI_B_PIN, OUTPUT);
+  pinMode(TDS_SENSOR_PIN, INPUT);
+  pinMode(PH_SENSOR_PIN, INPUT);
+  
+  turnPumpOff();
+  Serial.println("✓ GPIO Pins Configured");
+
+  // === WIFI CONNECTION ===
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(ssid);
+  
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  WiFi.setAutoReconnect(true);
+  
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  
+  Serial.println();
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("✓ WiFi Connected!");
+    Serial.print("  Node IP: ");
+    Serial.println(WiFi.localIP());
+    Serial.print("  Gateway Target: ");
+    Serial.print(gatewayIP);
+    Serial.print(":");
+    Serial.println(gatewayPort);
+  } else {
+    Serial.println("✗ WiFi Connection Failed!");
+    Serial.println("  Running in standalone AUTO mode");
+  }
+
+  // === TDS SENSOR INITIALIZATION ===
+  gravityTds.setPin(TDS_SENSOR_PIN);
+  gravityTds.setAref(3.3);
+  gravityTds.setAdcRange(4096);
+  gravityTds.begin();
+  
+  Serial.println("✓ TDS Sensor Initialized");
+  Serial.println("✓ pH Sensor Initialized (Monitoring)");
+  
+  Serial.println("\n╔════════════════════════════════════════╗");
+  Serial.printf("║  Node ID      : %-23d║\n", nodeID);
+  Serial.printf("║  Setpoint PPM : %-23.0f║\n", setpointPPM);
+  Serial.printf("║  Mode         : %-23s║\n", "AUTO");
+  Serial.println("╠════════════════════════════════════════╣");
+  Serial.println("║  ArduinoJson  : v6 & v7 Compatible     ║");
+  Serial.println("║  EEPROM       : Enabled                ║");
+  Serial.println("║  Auto-Reconnect: Enabled               ║");
+  Serial.println("╚════════════════════════════════════════╝\n");
+  
+  // Initial sensor read
+  readSensors();
+}
+
+// =====================================================
+// MAIN LOOP
+// =====================================================
+void loop() {
+  unsigned long now = millis();
+
+  // === BACA SENSOR ===
+  if (now - lastSensorRead >= SENSOR_INTERVAL) {
+    readSensors();
+    lastSensorRead = now;
+  }
+
+  // === JALANKAN KONTROL ===
+  executeControl();
+
+  // === SINKRONISASI DENGAN GATEWAY ===
+  if (now - lastGatewaySync >= GATEWAY_INTERVAL) {
+    syncWithGateway();
+    lastGatewaySync = now;
+  }
+
+  // === CHECK WIFI CONNECTION ===
+  if (now - lastWiFiCheck >= WIFI_CHECK_INTERVAL) {
+    checkWiFiConnection();
+    lastWiFiCheck = now;
+  }
+
+  // === SAVE CONFIG KE EEPROM (jika ada perubahan) ===
+  if (configChanged && (now - lastConfigSave >= CONFIG_SAVE_INTERVAL)) {
+    saveConfig();
+    lastConfigSave = now;
+  }
+
+  // === PRINT STATUS ===
+  if (now - lastSerialPrint >= PRINT_INTERVAL) {
+    printStatus();
+    lastSerialPrint = now;
+  }
+  
+  // Yield to system - lebih baik dari delay(10)
+  yield();
+}
