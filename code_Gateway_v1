@@ -1,0 +1,622 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <ArduinoJson.h>
+#include <Firebase_ESP_Client.h>
+#include "addons/TokenHelper.h"
+#include "addons/RTDBHelper.h"
+
+// ==================== KONFIGURASI ====================
+const char* ssid = "smk unnes semarang";
+const char* password = "12345678";
+
+#define FIREBASE_HOST "ecofarm-iot-default-rtdb.asia-southeast1.firebasedatabase.app"
+#define FIREBASE_AUTH "8PDjRTyCq52JDqwntLZqBFt0Is3odlDzZULmZREJ"
+
+#define NUM_NODES 4
+
+// ==================== FIREBASE OBJECTS ====================
+FirebaseData fbdo;
+FirebaseData fbdo_stream;
+FirebaseAuth auth;
+FirebaseConfig config;
+
+WebServer server(8080);
+
+// ==================== STRUKTUR DATA ====================
+struct NodeControl {
+  bool manual_mode;
+  bool pump_command;
+  float setpoint_ppm;
+  unsigned long timestamp;
+};
+
+struct NodeStatus {
+  unsigned long last_seen;
+  bool online;
+  float current_ppm;
+  float current_ph;
+  bool pump_active;
+  String mode;
+};
+
+NodeControl controls[NUM_NODES];
+NodeStatus node_status[NUM_NODES];
+
+// Status Firebase
+bool firebaseReady = false;
+bool streamReady = false;
+unsigned long lastStreamCheck = 0;
+
+// ==================== FIREBASE STREAM CALLBACK ====================
+void streamCallback(FirebaseStream data) {
+  Serial.println("\n========== FIREBASE STREAM UPDATE ==========");
+  Serial.printf("Path: %s\n", data.dataPath().c_str());
+  
+  String path = data.dataPath();
+  
+  // Parse node_id dari path
+  if (path.startsWith("/nodes/node_")) {
+    int nodeStart = path.indexOf("node_") + 5;
+    int nodeEnd = path.indexOf("/", nodeStart);
+    if (nodeEnd == -1) nodeEnd = path.length();
+    
+    String nodeStr = path.substring(nodeStart, nodeEnd);
+    int nodeId = nodeStr.toInt();
+    
+    if (nodeId >= 1 && nodeId <= NUM_NODES && path.indexOf("/control") != -1) {
+      FirebaseJson json = data.jsonObject();
+      FirebaseJsonData jsonData;
+      
+      NodeControl& ctrl = controls[nodeId - 1];
+      
+      if (json.get(jsonData, "manual_mode")) {
+        ctrl.manual_mode = jsonData.boolValue;
+      }
+      if (json.get(jsonData, "pump_command")) {
+        ctrl.pump_command = jsonData.boolValue;
+      }
+      if (json.get(jsonData, "setpoint_ppm")) {
+        ctrl.setpoint_ppm = jsonData.floatValue;
+      }
+      
+      ctrl.timestamp = millis();
+      
+      Serial.printf("✓ Node %d Updated: Mode=%s, Pump=%s, Setpoint=%.1f\n", 
+                    nodeId,
+                    ctrl.manual_mode ? "MANUAL" : "AUTO",
+                    ctrl.pump_command ? "ON" : "OFF",
+                    ctrl.setpoint_ppm);
+    }
+  }
+  Serial.println("============================================\n");
+}
+
+void streamTimeoutCallback(bool timeout) {
+  if (timeout) {
+    Serial.println("[STREAM] ⚠ Timeout - will reconnect");
+    streamReady = false;
+  }
+}
+
+// ==================== FIREBASE FUNCTIONS ====================
+void setupFirebaseStream() {
+  if (!firebaseReady) {
+    Serial.println("[FIREBASE] Not ready, skip stream setup");
+    return;
+  }
+  
+  Serial.println("[FIREBASE] Setting up real-time stream...");
+  
+  if (Firebase.RTDB.beginStream(&fbdo_stream, "/nodes")) {
+    Firebase.RTDB.setStreamCallback(&fbdo_stream, streamCallback, streamTimeoutCallback);
+    streamReady = true;
+    Serial.println("[FIREBASE] ✅ Stream active!");
+  } else {
+    Serial.printf("[FIREBASE] ❌ Stream failed: %s\n", fbdo_stream.errorReason().c_str());
+    streamReady = false;
+  }
+}
+
+void syncControlFromFirebase() {
+  if (!firebaseReady) return;
+  
+  Serial.println("\n[FIREBASE] Syncing control data...");
+  
+  for (int i = 1; i <= NUM_NODES; i++) {
+    String path = "/nodes/node_" + String(i) + "/control";
+    
+    if (Firebase.RTDB.getJSON(&fbdo, path.c_str())) {
+      if (fbdo.dataType() == "json") {
+        FirebaseJson json = fbdo.jsonObject();
+        FirebaseJsonData jsonData;
+        
+        NodeControl& ctrl = controls[i - 1];
+        
+        if (json.get(jsonData, "manual_mode")) {
+          ctrl.manual_mode = jsonData.boolValue;
+        }
+        if (json.get(jsonData, "pump_command")) {
+          ctrl.pump_command = jsonData.boolValue;
+        }
+        if (json.get(jsonData, "setpoint_ppm")) {
+          ctrl.setpoint_ppm = jsonData.floatValue;
+        }
+        
+        ctrl.timestamp = millis();
+        
+        Serial.printf("  ✓ Node %d: Mode=%s, Setpoint=%.1f ppm\n", 
+                      i, ctrl.manual_mode ? "MANUAL" : "AUTO", ctrl.setpoint_ppm);
+      }
+    }
+    delay(50);
+  }
+  
+  Serial.println("[FIREBASE] Sync complete!\n");
+}
+
+bool sendToFirebase(int node_id, const DynamicJsonDocument& sensorDoc) {
+  if (!firebaseReady) {
+    Serial.println("[FIREBASE] ⚠ Not connected");
+    return false;
+  }
+  
+  // Update node status dari sensor data
+  int idx = node_id - 1;
+  node_status[idx].last_seen = millis();
+  node_status[idx].online = true;
+  
+  if (sensorDoc.containsKey("ppm")) node_status[idx].current_ppm = sensorDoc["ppm"];
+  if (sensorDoc.containsKey("ph")) node_status[idx].current_ph = sensorDoc["ph"];
+  if (sensorDoc.containsKey("pump_active")) node_status[idx].pump_active = sensorDoc["pump_active"];
+  if (sensorDoc.containsKey("mode")) node_status[idx].mode = sensorDoc["mode"].as<String>();
+  
+  // Path untuk data sensor dan status
+  String dataPath = "/nodes/node_" + String(node_id) + "/sensor_data";
+  String statusPath = "/nodes/node_" + String(node_id) + "/status";
+  
+  // Convert sensor doc to FirebaseJson
+  FirebaseJson dataJson;
+  dataJson.setJsonData(sensorDoc.as<String>());
+  
+  // Push sensor data (history)
+  bool dataSuccess = Firebase.RTDB.pushJSON(&fbdo, dataPath.c_str(), &dataJson);
+  
+  if (dataSuccess) {
+    // Update current status
+    FirebaseJson statusJson;
+    statusJson.set("online", true);
+    statusJson.set("last_seen", millis());
+    statusJson.set("current_ppm", node_status[idx].current_ppm);
+    statusJson.set("current_ph", node_status[idx].current_ph);
+    statusJson.set("pump_active", node_status[idx].pump_active);
+    statusJson.set("mode", node_status[idx].mode);
+    
+    Firebase.RTDB.setJSON(&fbdo, statusPath.c_str(), &statusJson);
+    
+    Serial.printf("[FIREBASE] ✅ Data sent for Node %d\n", node_id);
+    return true;
+  } else {
+    Serial.printf("[FIREBASE] ❌ Failed to send: %s\n", fbdo.errorReason().c_str());
+    return false;
+  }
+}
+
+bool updateControlToFirebase(int node_id, const NodeControl& ctrl) {
+  if (!firebaseReady) return false;
+  
+  String path = "/nodes/node_" + String(node_id) + "/control";
+  
+  FirebaseJson json;
+  json.set("manual_mode", ctrl.manual_mode);
+  json.set("pump_command", ctrl.pump_command);
+  json.set("setpoint_ppm", ctrl.setpoint_ppm);
+  json.set("timestamp", millis());
+  
+  if (Firebase.RTDB.setJSON(&fbdo, path.c_str(), &json)) {
+    Serial.printf("[FIREBASE] ✅ Control updated for Node %d\n", node_id);
+    return true;
+  } else {
+    Serial.printf("[FIREBASE] ❌ Control update failed: %s\n", fbdo.errorReason().c_str());
+    return false;
+  }
+}
+
+// ==================== HTTP HANDLERS ====================
+void setCORSHeaders() {
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
+void handleOptions() {
+  setCORSHeaders();
+  server.send(200, "text/plain", "");
+}
+
+// PING endpoint
+void handlePing() {
+  setCORSHeaders();
+  
+  DynamicJsonDocument doc(256);
+  doc["status"] = "ok";
+  doc["gateway"] = "hidroponik";
+  doc["ip"] = WiFi.localIP().toString();
+  doc["uptime"] = millis() / 1000;
+  doc["firebase"] = firebaseReady ? "connected" : "disconnected";
+  doc["stream"] = streamReady ? "active" : "inactive";
+  
+  String response;
+  serializeJson(doc, response);
+  server.send(200, "application/json", response);
+  
+  Serial.println("[PING] ✓ Received");
+}
+
+// Node sync endpoint
+void handleNodeSync() {
+  setCORSHeaders();
+  
+  if (server.method() != HTTP_POST) {
+    server.send(405, "application/json", "{\"error\":\"Method not allowed\"}");
+    return;
+  }
+  
+  String body = server.arg("plain");
+  
+  Serial.println("\n========== NODE SYNC ==========");
+  
+  if (body.length() == 0) {
+    server.send(400, "application/json", "{\"error\":\"Empty body\"}");
+    return;
+  }
+  
+  DynamicJsonDocument doc(1024);
+  DeserializationError error = deserializeJson(doc, body);
+  
+  if (error) {
+    Serial.printf("JSON Error: %s\n", error.c_str());
+    server.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+    return;
+  }
+  
+  if (!doc.containsKey("node_id")) {
+    server.send(400, "application/json", "{\"error\":\"Missing node_id\"}");
+    return;
+  }
+  
+  int node_id = doc["node_id"];
+  
+  if (node_id < 1 || node_id > NUM_NODES) {
+    server.send(400, "application/json", "{\"error\":\"Invalid node_id\"}");
+    return;
+  }
+  
+  // Tambahkan server timestamp
+  doc["server_timestamp"] = millis();
+  
+  // Kirim ke Firebase
+  bool firebaseSuccess = sendToFirebase(node_id, doc);
+  
+  // Prepare response
+  int idx = node_id - 1;
+  NodeControl& ctrl = controls[idx];
+  
+  DynamicJsonDocument response(512);
+  response["status"] = "success";
+  response["firebase"] = firebaseSuccess ? "success" : "failed";
+  response["mode"] = ctrl.manual_mode ? "MANUAL" : "AUTO";
+  response["manual_pump"] = ctrl.pump_command;
+  response["setpoint"] = ctrl.setpoint_ppm;
+  response["timestamp"] = ctrl.timestamp;
+  
+  String responseStr;
+  serializeJson(response, responseStr);
+  server.send(200, "application/json", responseStr);
+  
+  Serial.printf("✓ Node %d: PPM=%.1f, pH=%.2f, Mode=%s, Firebase=%s\n", 
+                node_id,
+                doc["ppm"].as<float>(),
+                doc["ph"].as<float>(),
+                doc["mode"].as<String>().c_str(),
+                firebaseSuccess ? "✓" : "✗");
+  Serial.println("===============================\n");
+}
+
+// Control endpoint (dari Web Dashboard)
+void handleControl() {
+  setCORSHeaders();
+  
+  if (server.method() != HTTP_POST) {
+    server.send(405, "application/json", "{\"error\":\"Method not allowed\"}");
+    return;
+  }
+  
+  String body = server.arg("plain");
+  DynamicJsonDocument doc(512);
+  
+  if (deserializeJson(doc, body)) {
+    server.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+    return;
+  }
+  
+  int node_id = doc["node_id"];
+  
+  if (node_id < 1 || node_id > NUM_NODES) {
+    server.send(400, "application/json", "{\"error\":\"Invalid node_id\"}");
+    return;
+  }
+  
+  int idx = node_id - 1;
+  
+  // Update local cache
+  if (doc.containsKey("manual_mode")) controls[idx].manual_mode = doc["manual_mode"];
+  if (doc.containsKey("pump_command")) controls[idx].pump_command = doc["pump_command"];
+  if (doc.containsKey("setpoint_ppm")) controls[idx].setpoint_ppm = doc["setpoint_ppm"];
+  
+  controls[idx].timestamp = millis();
+  
+  // Update ke Firebase
+  bool firebaseSuccess = updateControlToFirebase(node_id, controls[idx]);
+  
+  DynamicJsonDocument response(256);
+  response["status"] = "success";
+  response["firebase"] = firebaseSuccess ? "success" : "failed";
+  response["node_id"] = node_id;
+  
+  String responseStr;
+  serializeJson(response, responseStr);
+  server.send(200, "application/json", responseStr);
+  
+  Serial.printf("[CONTROL] Node %d: Mode=%s, Pump=%s, Setpoint=%.1f, Firebase=%s\n",
+                node_id,
+                controls[idx].manual_mode ? "MANUAL" : "AUTO",
+                controls[idx].pump_command ? "ON" : "OFF",
+                controls[idx].setpoint_ppm,
+                firebaseSuccess ? "✓" : "✗");
+}
+
+// Status endpoint
+void handleGetStatus() {
+  setCORSHeaders();
+  
+  DynamicJsonDocument doc(2048);
+  JsonArray nodes = doc.createNestedArray("nodes");
+  
+  unsigned long now = millis();
+  
+  for (int i = 0; i < NUM_NODES; i++) {
+    JsonObject node = nodes.createNestedObject();
+    node["node_id"] = i + 1;
+    node["online"] = (now - node_status[i].last_seen < 30000);
+    node["last_seen_sec"] = (now - node_status[i].last_seen) / 1000;
+    node["current_ppm"] = node_status[i].current_ppm;
+    node["current_ph"] = node_status[i].current_ph;
+    node["pump_active"] = node_status[i].pump_active;
+    node["mode"] = node_status[i].mode;
+    
+    // Control info
+    node["manual_mode"] = controls[i].manual_mode;
+    node["pump_command"] = controls[i].pump_command;
+    node["setpoint_ppm"] = controls[i].setpoint_ppm;
+  }
+  
+  doc["gateway_ip"] = WiFi.localIP().toString();
+  doc["uptime"] = millis() / 1000;
+  doc["firebase_connected"] = firebaseReady;
+  doc["firebase_stream"] = streamReady;
+  
+  String response;
+  serializeJson(doc, response);
+  server.send(200, "application/json", response);
+}
+
+// ==================== SETUP ====================
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  
+  Serial.println("\n\n");
+  Serial.println("╔════════════════════════════════════════╗");
+  Serial.println("║  ESP32 HIDROPONIK GATEWAY + FIREBASE  ║");
+  Serial.println("╚════════════════════════════════════════╝\n");
+  
+  // Initialize arrays
+  for (int i = 0; i < NUM_NODES; i++) {
+    controls[i] = {false, false, 800.0, 0};
+    node_status[i] = {0, false, 0.0, 0.0, false, "AUTO"};
+  }
+  
+  // WiFi Connection
+  Serial.println("Connecting to WiFi...");
+  Serial.printf("SSID: %s\n", ssid);
+  
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  WiFi.setAutoReconnect(true);
+  
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  
+  Serial.println();
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\n✅✅✅ WIFI CONNECTED! ✅✅✅\n");
+    
+    // PRINT IP
+    Serial.println("╔════════════════════════════════════════╗");
+    Serial.println("║     ⚠️  GATEWAY IP ADDRESS ⚠️          ║");
+    Serial.println("╠════════════════════════════════════════╣");
+    Serial.print("║        ");
+    Serial.print(WiFi.localIP());
+    Serial.println("               ║");
+    Serial.println("╠════════════════════════════════════════╣");
+    Serial.println("║  UPDATE IP DI CODE NODE!               ║");
+    Serial.print("║  const char* gatewayIP = \"");
+    Serial.print(WiFi.localIP());
+    Serial.println("\";  ║");
+    Serial.println("╚════════════════════════════════════════╝\n");
+    
+    Serial.println("Network Details:");
+    Serial.printf("  Local IP : %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("  Gateway  : %s\n", WiFi.gatewayIP().toString().c_str());
+    Serial.printf("  Subnet   : %s\n", WiFi.subnetMask().toString().c_str());
+    Serial.printf("  RSSI     : %d dBm\n\n", WiFi.RSSI());
+    
+  } else {
+    Serial.println("\n❌ WIFI FAILED!\n");
+    return;
+  }
+  
+  // ========== FIREBASE CONFIGURATION ==========
+  Serial.println("╔════════════════════════════════════════╗");
+  Serial.println("║  CONNECTING TO FIREBASE...             ║");
+  Serial.println("╚════════════════════════════════════════╝");
+  
+  Serial.printf("Host: %s\n", FIREBASE_HOST);
+  
+  config.database_url = FIREBASE_HOST;
+  config.signer.tokens.legacy_token = FIREBASE_AUTH;
+  config.timeout.serverResponse = 10 * 1000;
+  
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectWiFi(true);
+  
+  // Test Firebase connection
+  delay(1000);
+  Serial.println("\nTesting Firebase connection...");
+  
+  if (Firebase.ready()) {
+    firebaseReady = true;
+    Serial.println("\n✅✅✅ FIREBASE CONNECTED! ✅✅✅\n");
+    
+    // Test write
+    FirebaseJson testJson;
+    testJson.set("status", "online");
+    testJson.set("gateway_ip", WiFi.localIP().toString());
+    testJson.set("timestamp", millis());
+    
+    if (Firebase.RTDB.setJSON(&fbdo, "/server_status", &testJson)) {
+      Serial.println("✓ Test write successful!");
+    } else {
+      Serial.printf("⚠ Test write failed: %s\n", fbdo.errorReason().c_str());
+    }
+    
+    // Sync existing control data
+    syncControlFromFirebase();
+    
+    // Setup real-time stream
+    setupFirebaseStream();
+    
+  } else {
+    Serial.println("\n❌ FIREBASE CONNECTION FAILED!\n");
+    Serial.println("Possible issues:");
+    Serial.println("- Check FIREBASE_HOST");
+    Serial.println("- Check FIREBASE_AUTH token");
+    Serial.println("- Check internet connection");
+    firebaseReady = false;
+  }
+  
+  // Setup HTTP Server
+  Serial.println("\n╔════════════════════════════════════════╗");
+  Serial.println("║  SETTING UP HTTP SERVER...             ║");
+  Serial.println("╚════════════════════════════════════════╝\n");
+  
+  server.on("/ping", HTTP_GET, handlePing);
+  server.on("/ping", HTTP_OPTIONS, handleOptions);
+  
+  server.on("/api/node/sync", HTTP_POST, handleNodeSync);
+  server.on("/api/node/sync", HTTP_OPTIONS, handleOptions);
+  
+  server.on("/api/control", HTTP_POST, handleControl);
+  server.on("/api/control", HTTP_OPTIONS, handleOptions);
+  
+  server.on("/api/status", HTTP_GET, handleGetStatus);
+  server.on("/api/status", HTTP_OPTIONS, handleOptions);
+  
+  server.onNotFound([]() {
+    setCORSHeaders();
+    server.send(404, "application/json", "{\"error\":\"Not found\"}");
+  });
+  
+  server.begin();
+  
+  Serial.println("╔════════════════════════════════════════╗");
+  Serial.println("║  ✅ GATEWAY READY!                     ║");
+  Serial.println("╠════════════════════════════════════════╣");
+  Serial.printf("║  HTTP Server : Port 8080               ║\n");
+  Serial.printf("║  Firebase    : %-7s                ║\n", firebaseReady ? "✅ OK" : "❌ FAIL");
+  Serial.printf("║  Stream      : %-7s                ║\n", streamReady ? "✅ OK" : "❌ FAIL");
+  Serial.printf("║  Nodes       : %d                        ║\n", NUM_NODES);
+  Serial.println("╠════════════════════════════════════════╣");
+  Serial.println("║  Endpoints:                            ║");
+  Serial.println("║  GET  /ping                            ║");
+  Serial.println("║  POST /api/node/sync                   ║");
+  Serial.println("║  POST /api/control                     ║");
+  Serial.println("║  GET  /api/status                      ║");
+  Serial.println("╚════════════════════════════════════════╝\n");
+  
+  if (firebaseReady) {
+    Serial.println("✅ Firebase Database URL:");
+    Serial.printf("   https://%s\n\n", FIREBASE_HOST);
+  }
+  
+  Serial.println("Waiting for nodes to connect...\n");
+}
+
+// ==================== LOOP ====================
+void loop() {
+  server.handleClient();
+  
+  unsigned long now = millis();
+  
+  // Maintain Firebase connection
+  if (firebaseReady && WiFi.status() == WL_CONNECTED) {
+    Firebase.ready();
+    
+    // Check stream health setiap 5 detik
+    if (now - lastStreamCheck > 5000) {
+      if (streamReady && !fbdo_stream.isStream()) {
+        Serial.println("[STREAM] ⚠ Disconnected, reconnecting...");
+        setupFirebaseStream();
+      }
+      lastStreamCheck = now;
+    }
+  }
+  
+  // Check WiFi connection setiap 10 detik
+  static unsigned long lastWiFiCheck = 0;
+  if (now - lastWiFiCheck > 10000) {
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("⚠️ WiFi disconnected! Reconnecting...");
+      WiFi.reconnect();
+    }
+    lastWiFiCheck = now;
+  }
+  
+  // Check node status (watchdog) setiap 30 detik
+  static unsigned long lastWatchdog = 0;
+  if (now - lastWatchdog > 30000) {
+    for (int i = 0; i < NUM_NODES; i++) {
+      if (node_status[i].online && (now - node_status[i].last_seen > 30000)) {
+        node_status[i].online = false;
+        Serial.printf("[WATCHDOG] ⚠ Node %d offline\n", i + 1);
+        
+        // Update status offline ke Firebase
+        if (firebaseReady) {
+          String statusPath = "/nodes/node_" + String(i + 1) + "/status";
+          FirebaseJson statusJson;
+          statusJson.set("online", false);
+          statusJson.set("last_seen", node_status[i].last_seen);
+          Firebase.RTDB.setJSON(&fbdo, statusPath.c_str(), &statusJson);
+        }
+      }
+    }
+    lastWatchdog = now;
+  }
+  
+  delay(10);
+}
