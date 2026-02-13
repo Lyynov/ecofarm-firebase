@@ -1,6 +1,6 @@
 /*
  * ESP32 NUTRIENT CONTROL SYSTEM - NODE SENSOR 2
- * Features: TDS/PPM Control (Fuzzy Logic), pH Monitoring
+ * Features: TDS/PPM Control (Fuzzy Logic 2 Input: Error & Delta Error)
  * Mode: Auto (Fuzzy di Node) / Manual (Command dari Gateway)
  */
 
@@ -9,11 +9,12 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include "GravityTDS.h"
+#include <EEPROM.h>
 
 // ==================== KONFIGURASI NETWORK ====================
 const char* ssid = "smk unnes semarang"; 
 const char* password = "12345678";  
-const char* gatewayIP = "192.168.137.198";  // ⚠️ SESUAIKAN DENGAN IP GATEWAY!
+const char* gatewayIP = "10.58.130.254";  // ⚠️ SESUAIKAN DENGAN IP GATEWAY!
 const int gatewayPort = 8080;
 const int nodeID = 3;  // ⚠️ UBAH UNTUK SETIAP NODE (1-4)
 
@@ -21,7 +22,6 @@ const int nodeID = 3;  // ⚠️ UBAH UNTUK SETIAP NODE (1-4)
 const int PUMP_NUTRISI_A_PIN = 12;
 const int PUMP_NUTRISI_B_PIN = 14;
 const int TDS_SENSOR_PIN = 35;
-const int PH_SENSOR_PIN = 34;
 
 const bool RELAY_ACTIVE_LOW = true;
 
@@ -30,24 +30,70 @@ float setpointPPM = 800.0;  // Default - akan diambil dari EEPROM
 bool isAutoMode = true;
 bool manualPumpCommand = false;
 
-// ==================== FUZZY LOGIC PARAMETERS ====================
-const float ERR_LOW = 10.0;
-const float ERR_MED = 30.0;
-const float ERR_HIGH = 60.0;
+// ==================== FUZZY LOGIC PARAMETERS (2 INPUT) ====================
+// Membership Function Parameters - ERROR (%)
+const float ERR_LOW_A = 0.0;
+const float ERR_LOW_B = 0.0;
+const float ERR_LOW_C = 10.0;
+const float ERR_LOW_D = 30.0;
 
-const unsigned long DUR_FAST = 1000;
-const unsigned long DUR_MED = 3000;
-const unsigned long DUR_LONG = 7000;
-const unsigned long DUR_VERY_LONG = 12000;
+const float ERR_MED_A = 10.0;
+const float ERR_MED_B = 30.0;
+const float ERR_MED_C = 60.0;
 
-struct FuzzyMembership { 
-  float fast, medium, long_dur, very_long; 
+const float ERR_HIGH_A = 30.0;
+const float ERR_HIGH_B = 60.0;
+const float ERR_HIGH_C = 100.0;
+const float ERR_HIGH_D = 100.0;
+
+// Membership Function Parameters - DELTA ERROR (%/s)
+const float DELTA_DEC_A = -10.0;
+const float DELTA_DEC_B = -10.0;
+const float DELTA_DEC_C = -5.0;
+const float DELTA_DEC_D = 0.0;
+
+const float DELTA_STABLE_A = -3.0;
+const float DELTA_STABLE_B = 0.0;
+const float DELTA_STABLE_C = 3.0;
+
+const float DELTA_INC_A = 0.0;
+const float DELTA_INC_B = 5.0;
+const float DELTA_INC_C = 10.0;
+const float DELTA_INC_D = 10.0;
+
+// Output Duration (ms)
+const unsigned long DUR_VERY_SHORT = 5000; // 5 Detik
+const unsigned long DUR_SHORT = 10000;     // 10 Detik
+const unsigned long DUR_MEDIUM = 20000;    // 20 Detik
+const unsigned long DUR_LONG = 400000;     // 40 Detik
+const unsigned long DUR_VERY_LONG = 50000; // 50 Detik
+
+struct FuzzyMembership2Input {
+  // Error memberships
+  float err_low;
+  float err_medium;
+  float err_high;
+  
+  // Delta Error memberships
+  float delta_decreasing;
+  float delta_stable;
+  float delta_increasing;
+  
+  // Output memberships
+  float out_very_short;
+  float out_short;
+  float out_medium;
+  float out_long;
+  float out_very_long;
 };
 
 // ==================== SENSOR VARIABLES ====================
 GravityTDS gravityTds;
 float sensorPPM = 0.0;
-float sensorPH = 7.0;
+float previousPPM = 0.0;
+float errorPPM = 0.0;
+float previousError = 0.0;
+float deltaError = 0.0;
 
 // ==================== PUMP CONTROL STATE ====================
 bool pumpRunning = false;
@@ -57,7 +103,7 @@ unsigned long pumpDuration = 0;
 // ==================== HOMOGENIZATION STATE ====================
 bool waitingMix = false;
 unsigned long mixStartTime = 0;
-const unsigned long MIX_DELAY = 15000;
+const unsigned long MIX_DELAY = 100000; // 100 detik
 
 // ==================== TDS SMOOTHING BUFFER ====================
 #define BUFFER_SIZE 7
@@ -71,18 +117,23 @@ unsigned long lastGatewaySync = 0;
 unsigned long lastSerialPrint = 0;
 unsigned long lastWiFiCheck = 0;
 unsigned long lastConfigSave = 0;
+unsigned long lastErrorCalc = 0;
 
 const unsigned long SENSOR_INTERVAL = 1000;
-const unsigned long GATEWAY_INTERVAL = 5000;  // Sync setiap 5 detik
+const unsigned long GATEWAY_INTERVAL = 5000;
 const unsigned long PRINT_INTERVAL = 10000;
 const unsigned long WIFI_CHECK_INTERVAL = 10000;
 const unsigned long CONFIG_SAVE_INTERVAL = 60000;
+const unsigned long ERROR_CALC_INTERVAL = 1000;
 
 // ==================== CONNECTION STATUS ====================
 bool gatewayOnline = false;
 unsigned long lastSuccessSync = 0;
 int syncFailCount = 0;
 const int MAX_SYNC_FAILS = 10;
+
+// Testing variables
+unsigned long sequenceNo = 0;
 
 // ==================== EEPROM STORAGE ====================
 Preferences preferences;
@@ -134,16 +185,10 @@ void turnPumpOff() {
 // ==================== SENSOR READING ====================
 void readSensors() {
   // Read TDS Sensor
-  int rawADC = analogRead(TDS_SENSOR_PIN);
-  float voltage = rawADC * (3.3 / 4095.0);
-  
   gravityTds.setTemperature(25.0);
   gravityTds.update();
   float tdsValue = gravityTds.getTdsValue();
 
-  if (tdsValue < 1.0 && voltage > 0.1) {
-    tdsValue = (133.42 * pow(voltage, 3) - 255.86 * pow(voltage, 2) + 857.39 * voltage) * 0.5;
-  }
   if (isnan(tdsValue) || tdsValue < 0) tdsValue = 0;
 
   // Moving Average Filter
@@ -156,50 +201,116 @@ void readSensors() {
   for(int i = 0; i < count; i++) {
     sum += tdsBuffer[i];
   }
+  
+  previousPPM = sensorPPM;
   sensorPPM = (count > 0) ? (sum / count) : 0;
-
-  // Read pH Sensor
-  int rawPH = analogRead(PH_SENSOR_PIN);
-  float voltagePH = rawPH * (3.3 / 4095.0);
-  sensorPH = 7.0 - ((voltagePH - 2.5) / 0.18);
-  
-  if (sensorPH < 0) sensorPH = 0;
-  if (sensorPH > 14) sensorPH = 14;
 }
 
-// ==================== FUZZY LOGIC ENGINE ====================
-FuzzyMembership calculateFuzzyMembership(float errorPercent) {
-  FuzzyMembership membership = {0, 0, 0, 0};
-  
-  if (errorPercent <= ERR_LOW) {
-    membership.fast = 1.0;
-  } 
-  else if (errorPercent <= ERR_MED) {
-    membership.medium = (errorPercent - ERR_LOW) / (ERR_MED - ERR_LOW);
-    membership.fast = 1.0 - membership.medium;
-  } 
-  else if (errorPercent <= ERR_HIGH) {
-    membership.long_dur = (errorPercent - ERR_MED) / (ERR_HIGH - ERR_MED);
-    membership.medium = 1.0 - membership.long_dur;
-  } 
-  else {
-    membership.very_long = 1.0;
-  }
-  
-  return membership;
+// ==================== FUZZY MEMBERSHIP FUNCTIONS ====================
+// Trapezoidal Membership Function
+float trapezoidalMF(float x, float a, float b, float c, float d) {
+  if (x <= a || x >= d) return 0.0;
+  if (x >= b && x <= c) return 1.0;
+  if (x > a && x < b) return (x - a) / (b - a);
+  return (d - x) / (d - c);
 }
 
-unsigned long defuzzifyDuration(FuzzyMembership m) {
-  float numerator = (m.fast * DUR_FAST) + 
-                    (m.medium * DUR_MED) + 
-                    (m.long_dur * DUR_LONG) + 
-                    (m.very_long * DUR_VERY_LONG);
+// Triangular Membership Function
+float triangularMF(float x, float a, float b, float c) {
+  if (x <= a || x >= c) return 0.0;
+  if (x == b) return 1.0;
+  if (x > a && x < b) return (x - a) / (b - a);
+  return (c - x) / (c - b);
+}
+
+// ==================== FUZZY LOGIC ENGINE (2 INPUT) ====================
+FuzzyMembership2Input fuzzification(float error, float deltaErr) {
+  FuzzyMembership2Input mf;
   
-  float denominator = m.fast + m.medium + m.long_dur + m.very_long;
+  // Fuzzifikasi ERROR (%)
+  mf.err_low = trapezoidalMF(error, ERR_LOW_A, ERR_LOW_B, ERR_LOW_C, ERR_LOW_D);
+  mf.err_medium = triangularMF(error, ERR_MED_A, ERR_MED_B, ERR_MED_C);
+  mf.err_high = trapezoidalMF(error, ERR_HIGH_A, ERR_HIGH_B, ERR_HIGH_C, ERR_HIGH_D);
   
-  if (denominator == 0) return DUR_MED;
+  // Fuzzifikasi DELTA ERROR (%/s)
+  mf.delta_decreasing = trapezoidalMF(deltaErr, DELTA_DEC_A, DELTA_DEC_B, DELTA_DEC_C, DELTA_DEC_D);
+  mf.delta_stable = triangularMF(deltaErr, DELTA_STABLE_A, DELTA_STABLE_B, DELTA_STABLE_C);
+  mf.delta_increasing = trapezoidalMF(deltaErr, DELTA_INC_A, DELTA_INC_B, DELTA_INC_C, DELTA_INC_D);
+  
+  // Initialize outputs
+  mf.out_very_short = 0.0;
+  mf.out_short = 0.0;
+  mf.out_medium = 0.0;
+  mf.out_long = 0.0;
+  mf.out_very_long = 0.0;
+  
+  return mf;
+}
+
+void applyFuzzyRules(FuzzyMembership2Input &mf) {
+  // RULE BASE (9 rules):
+  // Error Low + Delta Decreasing -> Very Short
+  mf.out_very_short = max(mf.out_very_short, min(mf.err_low, mf.delta_decreasing));
+  
+  // Error Low + Delta Stable -> Short
+  mf.out_short = max(mf.out_short, min(mf.err_low, mf.delta_stable));
+  
+  // Error Low + Delta Increasing -> Medium
+  mf.out_medium = max(mf.out_medium, min(mf.err_low, mf.delta_increasing));
+  
+  // Error Medium + Delta Decreasing -> Short
+  mf.out_short = max(mf.out_short, min(mf.err_medium, mf.delta_decreasing));
+  
+  // Error Medium + Delta Stable -> Medium
+  mf.out_medium = max(mf.out_medium, min(mf.err_medium, mf.delta_stable));
+  
+  // Error Medium + Delta Increasing -> Long
+  mf.out_long = max(mf.out_long, min(mf.err_medium, mf.delta_increasing));
+  
+  // Error High + Delta Decreasing -> Medium
+  mf.out_medium = max(mf.out_medium, min(mf.err_high, mf.delta_decreasing));
+  
+  // Error High + Delta Stable -> Long
+  mf.out_long = max(mf.out_long, min(mf.err_high, mf.delta_stable));
+  
+  // Error High + Delta Increasing -> Very Long
+  mf.out_very_long = max(mf.out_very_long, min(mf.err_high, mf.delta_increasing));
+}
+
+unsigned long defuzzifyDuration(FuzzyMembership2Input mf) {
+  // Centroid defuzzification
+  float numerator = (mf.out_very_short * DUR_VERY_SHORT) + 
+                    (mf.out_short * DUR_SHORT) + 
+                    (mf.out_medium * DUR_MEDIUM) + 
+                    (mf.out_long * DUR_LONG) + 
+                    (mf.out_very_long * DUR_VERY_LONG);
+  
+  float denominator = mf.out_very_short + mf.out_short + mf.out_medium + 
+                      mf.out_long + mf.out_very_long;
+  
+  if (denominator == 0) return DUR_MEDIUM;
   
   return (unsigned long)(numerator / denominator);
+}
+
+// ==================== ERROR CALCULATION ====================
+void calculateError() {
+  if (setpointPPM <= 0) return;
+  
+  previousError = errorPPM;
+  errorPPM = ((setpointPPM - sensorPPM) / setpointPPM) * 100.0;
+  
+  // Clamp error to 0-100%
+  if (errorPPM < 0) errorPPM = 0;
+  if (errorPPM > 100) errorPPM = 100;
+  
+  // Calculate delta error (%/s)
+  float dt = ERROR_CALC_INTERVAL / 1000.0;  // convert to seconds
+  deltaError = (errorPPM - previousError) / dt;
+  
+  // Clamp delta error to -10 to +10 %/s
+  if (deltaError < -10.0) deltaError = -10.0;
+  if (deltaError > 10.0) deltaError = 10.0;
 }
 
 // ==================== CONTROL LOGIC ====================
@@ -214,7 +325,7 @@ void executeControl() {
     return;
   }
 
-  // MODE AUTO - FUZZY LOGIC
+  // MODE AUTO - FUZZY LOGIC (2 INPUT)
   
   if (pumpRunning) {
     if (now - pumpStartTime >= pumpDuration) {
@@ -234,14 +345,29 @@ void executeControl() {
     return;
   }
 
-  // FUZZY CONTROL DECISION
-  if (sensorPPM < setpointPPM && sensorPPM > 10.0) {
-    float errorPct = ((setpointPPM - sensorPPM) / setpointPPM) * 100.0;
+  // FUZZY CONTROL DECISION (2 INPUT: Error & Delta Error)
+  if (sensorPPM < setpointPPM && sensorPPM > 10.0 && errorPPM > 5.0) {
     
-    FuzzyMembership fuzzyMembership = calculateFuzzyMembership(errorPct);
-    pumpDuration = defuzzifyDuration(fuzzyMembership);
+    // Fuzzification
+    FuzzyMembership2Input fuzzyMF = fuzzification(errorPPM, deltaError);
     
-    Serial.printf("[FUZZY] Error: %.1f%% -> Duration: %lu ms\n", errorPct, pumpDuration);
+    // Rule evaluation
+    applyFuzzyRules(fuzzyMF);
+    
+    // Defuzzification
+    pumpDuration = defuzzifyDuration(fuzzyMF);
+    
+    Serial.println("\n========== FUZZY COMPUTATION (2 INPUT) ==========");
+    Serial.printf("INPUT  -> Error: %.1f%%, Delta Error: %.2f %%/s\n", errorPPM, deltaError);
+    Serial.printf("μ_Err  -> Low=%.3f, Med=%.3f, High=%.3f\n", 
+                  fuzzyMF.err_low, fuzzyMF.err_medium, fuzzyMF.err_high);
+    Serial.printf("μ_ΔErr -> Dec=%.3f, Stable=%.3f, Inc=%.3f\n",
+                  fuzzyMF.delta_decreasing, fuzzyMF.delta_stable, fuzzyMF.delta_increasing);
+    Serial.printf("OUTPUT -> VS=%.3f, S=%.3f, M=%.3f, L=%.3f, VL=%.3f\n",
+                  fuzzyMF.out_very_short, fuzzyMF.out_short, fuzzyMF.out_medium,
+                  fuzzyMF.out_long, fuzzyMF.out_very_long);
+    Serial.printf("CRISP  -> Duration: %lu ms (%.1f sec)\n", pumpDuration, pumpDuration/1000.0);
+    Serial.println("=================================================\n");
     
     pumpStartTime = now;
     turnPumpOn();
@@ -266,16 +392,25 @@ void syncWithGateway() {
   #if ARDUINOJSON_VERSION_MAJOR >= 7
     JsonDocument jsonDoc;
   #else
-    DynamicJsonDocument jsonDoc(512);
+    DynamicJsonDocument jsonDoc(1024);
   #endif
   
   jsonDoc["node_id"] = nodeID;
   jsonDoc["ppm"] = round(sensorPPM * 10) / 10.0;
-  jsonDoc["ph"] = round(sensorPH * 100) / 100.0;
+  jsonDoc["ph"] = 7.0;  // pH dihapus tapi tetap kirim nilai default untuk kompatibilitas
   jsonDoc["pump_active"] = pumpRunning || (manualPumpCommand && !isAutoMode);
   jsonDoc["mode"] = isAutoMode ? "AUTO" : "MANUAL";
   jsonDoc["setpoint"] = setpointPPM;
   jsonDoc["timestamp"] = millis();
+  
+  // Testing data
+  jsonDoc["sequence_no"] = sequenceNo++;
+  jsonDoc["t_send"] = millis();
+  jsonDoc["rssi"] = WiFi.RSSI();
+  
+  // Fuzzy debug data
+  jsonDoc["error_pct"] = errorPPM;
+  jsonDoc["delta_error"] = deltaError;
   
   String jsonPayload;
   serializeJson(jsonDoc, jsonPayload);
@@ -378,12 +513,14 @@ void printStatus() {
   unsigned long now = millis();
   
   Serial.println("\n===============================================");
-  Serial.printf("[NODE %d] Nutrient Control System\n", nodeID);
+  Serial.printf("[NODE %d] Nutrient Control System (2-Input Fuzzy)\n", nodeID);
   Serial.println("===============================================");
   
   // Sensor data
-  Serial.printf("[SENSOR]  PPM: %.1f ppm | pH: %.2f | Setpoint: %.0f ppm\n", 
-                sensorPPM, sensorPH, setpointPPM);
+  Serial.printf("[SENSOR]  PPM: %.1f ppm | Setpoint: %.0f ppm\n", 
+                sensorPPM, setpointPPM);
+  Serial.printf("[ERROR]   Error: %.1f%% | ΔError: %.2f %%/s\n",
+                errorPPM, deltaError);
   
   // Gateway status
   Serial.printf("[GATEWAY] ");
@@ -398,7 +535,7 @@ void printStatus() {
   
   // Operation status
   Serial.printf("[MODE]    ");
-  Serial.print(isAutoMode ? "AUTO (Fuzzy)" : "MANUAL (Gateway)");
+  Serial.print(isAutoMode ? "AUTO (Fuzzy 2-Input)" : "MANUAL (Gateway)");
   Serial.print(" | Status: ");
   
   if (pumpRunning) {
@@ -427,7 +564,7 @@ void setup() {
   
   Serial.println("\n===============================================");
   Serial.println("   ESP32 NUTRIENT CONTROL - NODE SENSOR 2");
-  Serial.println("   TDS/PPM: Fuzzy Control | pH: Monitor");
+  Serial.println("   FUZZY LOGIC: 2 INPUT (Error & Delta Error)");
   Serial.println("===============================================\n");
   
   // Load config
@@ -437,7 +574,6 @@ void setup() {
   pinMode(PUMP_NUTRISI_A_PIN, OUTPUT);
   pinMode(PUMP_NUTRISI_B_PIN, OUTPUT);
   pinMode(TDS_SENSOR_PIN, INPUT);
-  pinMode(PH_SENSOR_PIN, INPUT);
   
   turnPumpOff();
   Serial.println("✓ GPIO Pins Configured");
@@ -466,24 +602,26 @@ void setup() {
   }
 
   // TDS sensor init
+  EEPROM.begin(32);
   gravityTds.setPin(TDS_SENSOR_PIN);
   gravityTds.setAref(3.3);
   gravityTds.setAdcRange(4096);
   gravityTds.begin();
   
   Serial.println("✓ TDS Sensor Initialized");
-  Serial.println("✓ pH Sensor Initialized");
   
   Serial.println("\n╔════════════════════════════════════════╗");
   Serial.printf("║  Node ID      : %-23d║\n", nodeID);
   Serial.printf("║  Setpoint PPM : %-23.0f║\n", setpointPPM);
   Serial.printf("║  Mode         : %-23s║\n", "AUTO (Fuzzy)");
   Serial.println("╠════════════════════════════════════════╣");
-  Serial.println("║  Fuzzy Logic berjalan di NODE ini     ║");
-  Serial.println("║  Gateway hanya untuk monitoring       ║");
+  Serial.println("║  Fuzzy Logic: 2 INPUT                  ║");
+  Serial.println("║  - Error (%)                           ║");
+  Serial.println("║  - Delta Error (%/s)                   ║");
   Serial.println("╚════════════════════════════════════════╝\n");
   
   readSensors();
+  calculateError();
   Serial.println("System ready!\n");
 }
 
@@ -495,6 +633,12 @@ void loop() {
   if (now - lastSensorRead >= SENSOR_INTERVAL) {
     readSensors();
     lastSensorRead = now;
+  }
+
+  // Calculate error and delta error
+  if (now - lastErrorCalc >= ERROR_CALC_INTERVAL) {
+    calculateError();
+    lastErrorCalc = now;
   }
 
   // Execute control
