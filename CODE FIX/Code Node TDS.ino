@@ -14,7 +14,7 @@
 // ==================== KONFIGURASI NETWORK ====================
 const char* ssid = "smk unnes semarang"; 
 const char* password = "12345678";  
-const char* gatewayIP = "10.58.130.254";  // ⚠️ SESUAIKAN DENGAN IP GATEWAY!
+const char* gatewayIP = "10.59.225.254";  // ⚠️ SESUAIKAN DENGAN IP GATEWAY!
 const int gatewayPort = 8080;
 const int nodeID = 3;  // ⚠️ UBAH UNTUK SETIAP NODE (1-4)
 
@@ -62,11 +62,11 @@ const float DELTA_INC_C = 10.0;
 const float DELTA_INC_D = 10.0;
 
 // Output Duration (ms)
-const unsigned long DUR_VERY_SHORT = 5000; // 5 Detik
-const unsigned long DUR_SHORT = 10000;     // 10 Detik
-const unsigned long DUR_MEDIUM = 20000;    // 20 Detik
-const unsigned long DUR_LONG = 400000;     // 40 Detik
-const unsigned long DUR_VERY_LONG = 50000; // 50 Detik
+const unsigned long DUR_VERY_SHORT = 1000; // 5 Detik
+const unsigned long DUR_SHORT = 5000;     // 10 Detik
+const unsigned long DUR_MEDIUM = 9000;    // 20 Detik
+const unsigned long DUR_LONG = 120000;     // 40 Detik
+const unsigned long DUR_VERY_LONG = 15000; // 50 Detik
 
 struct FuzzyMembership2Input {
   // Error memberships
@@ -103,7 +103,7 @@ unsigned long pumpDuration = 0;
 // ==================== HOMOGENIZATION STATE ====================
 bool waitingMix = false;
 unsigned long mixStartTime = 0;
-const unsigned long MIX_DELAY = 100000; // 100 detik
+const unsigned long MIX_DELAY = 15000; // masih 15 detik nanti diganti 2 menit
 
 // ==================== TDS SMOOTHING BUFFER ====================
 #define BUFFER_SIZE 7
