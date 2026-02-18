@@ -9,8 +9,8 @@
 const char* ssid = "smk unnes semarang";
 const char* password = "12345678";
 
-#define FIREBASE_HOST "ecofarm-iot-default-rtdb.asia-southeast1.firebasedatabase.app"
-#define FIREBASE_AUTH "8PDjRTyCq52JDqwntLZqBFt0Is3odlDzZULmZREJ"
+#define FIREBASE_HOST "projectecofarm-98727-default-rtdb.asia-southeast1.firebasedatabase.app"
+#define FIREBASE_AUTH "z2fgLdOr7LsdHq9yNUGKhbxuGVfy6GPeuKsbFDyY"
 
 #define NUM_NODES 4
 
@@ -428,8 +428,8 @@ bool sendToFirebase(int node_id, const DynamicJsonDocument& sensorDoc) {
     }
   } else if (sensorDoc.containsKey("ppm")) {
     node_status[idx].node_type = 2;
-    node_status[idx].current_ppm = sensorDoc["ppm"];
-    node_status[idx].current_ph = sensorDoc["ph"];
+    node_status[idx].current_ppm = round(sensorDoc["ppm"].as<float>() * 10) / 10.0f;
+    node_status[idx].current_ph = round(sensorDoc["ph"].as<float>() * 10) / 10.0f;
     if (sensorDoc.containsKey("pump_active")) {
       node_status[idx].pump_active = sensorDoc["pump_active"];
     }
