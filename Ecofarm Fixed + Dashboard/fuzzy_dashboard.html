@@ -7,6 +7,7 @@
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root{--bg:#f0f4f8;--bg2:#ffffff;--bg3:#e8eef5;--border:#cbd5e1;--accent:#0284c7;--accent3:#059669;--danger:#dc2626;--warn:#d97706;--text:#1e293b;--muted:#64748b}
@@ -14,7 +15,6 @@
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Space Grotesk',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
 body::before{content:'';position:fixed;inset:0;z-index:0;background-image:linear-gradient(rgba(2,132,199,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(2,132,199,.04) 1px,transparent 1px);background-size:40px 40px;pointer-events:none}
-/* ── Theme Toggle Switch ── */
 .theme-switch{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;flex-shrink:0}
 .theme-switch-label{font-size:10px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);white-space:nowrap}
 .switch-track{width:40px;height:22px;border-radius:11px;background:var(--border);position:relative;transition:background .3s;border:1px solid var(--border)}
@@ -22,10 +22,8 @@ body::before{content:'';position:fixed;inset:0;z-index:0;background-image:linear
 [data-theme="dark"] .switch-track{background:#0284c7;border-color:#0284c7}
 [data-theme="dark"] .switch-thumb{transform:translateX(18px);background:#fff}
 [data-theme="dark"] .theme-switch-label{color:#64748b}
-/* Grid overlay per tema */
 [data-theme="dark"] body::before{background-image:linear-gradient(rgba(0,212,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(0,212,255,.025) 1px,transparent 1px)}
 [data-theme="light"] body::before, :root body::before{background-image:linear-gradient(rgba(2,132,199,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(2,132,199,.04) 1px,transparent 1px)}
-/* Header per tema */
 [data-theme="dark"] header{background:rgba(10,14,26,.95)}
 header{position:sticky;top:0;z-index:100;background:rgba(240,244,248,.95);backdrop-filter:blur(16px);border-bottom:1px solid var(--border);padding:14px 28px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .logo{display:flex;align-items:center;gap:10px}
@@ -52,6 +50,8 @@ main{position:relative;z-index:1;padding:24px 28px;max-width:1600px;margin:0 aut
 .kpi-strip{display:grid;gap:10px;margin-bottom:24px}
 .kpi-strip.nutrient{grid-template-columns:repeat(6,1fr)}
 .kpi-strip.exhaust{grid-template-columns:repeat(5,1fr)}
+/* NEW: network KPI strip */
+.kpi-strip.network{grid-template-columns:repeat(4,1fr)}
 .kpi{background:var(--bg2);border:1px solid var(--border);border-radius:13px;padding:14px 16px;transition:.3s}
 .kpi:hover{border-color:rgba(2,132,199,.2);background:var(--bg3)}
 .kpi-label{font-size:9px;font-weight:600;letter-spacing:1.5px;color:var(--muted);text-transform:uppercase;margin-bottom:7px}
@@ -59,19 +59,29 @@ main{position:relative;z-index:1;padding:24px 28px;max-width:1600px;margin:0 aut
 .kpi-sub{font-size:10px;color:var(--muted);margin-top:3px}
 .kpi-bar{height:3px;border-radius:2px;margin-top:9px;background:var(--border);overflow:hidden}
 .kpi-bar-fill{height:100%;border-radius:2px;transition:width .5s ease}
-/* nutrient kpi colors */
 .kpi.ppm .kpi-val{color:#d97706}.kpi.err .kpi-val{color:#dc2626}.kpi.derr .kpi-val{color:#2563eb}
 .kpi.dur .kpi-val{color:#059669}.kpi.pump .kpi-val{color:#7c3aed}.kpi.total .kpi-val{color:var(--accent)}
-/* exhaust kpi colors */
 .kpi.temp .kpi-val{color:#ea580c}.kpi.hum .kpi-val{color:#2563eb}.kpi.exh .kpi-val{color:#7c3aed}
 .kpi.fan .kpi-val{color:#059669}
+/* NEW network KPI colors */
+.kpi.latency .kpi-val{color:#f59e0b}
+.kpi.pdr .kpi-val{color:#10b981}
+.kpi.lat-min .kpi-val{color:#60a5fa}
+.kpi.lat-max .kpi-val{color:#f87171}
 .charts-grid{display:grid;gap:16px;margin-bottom:20px}
 .g2{grid-template-columns:3fr 2fr}.g22{grid-template-columns:1fr 1fr}.g3{grid-template-columns:1fr 1fr 1fr}
-.chart-card{background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:18px 22px;overflow:hidden}
+.chart-card{background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:18px 22px;overflow:hidden;position:relative}
+.btn-chart-print{position:absolute;top:10px;right:10px;padding:3px 9px;border-radius:6px;border:1px solid var(--border);background:var(--bg3);color:var(--muted);font-size:10px;font-weight:600;font-family:"Space Grotesk",sans-serif;cursor:pointer;transition:.2s;opacity:0;z-index:10}
+.chart-card:hover .btn-chart-print{opacity:1}
+.btn-chart-print:hover{border-color:var(--accent);color:var(--accent);background:var(--bg2)}
+.btn-chart-print:disabled{opacity:.4;cursor:not-allowed}
 .chart-title{font-size:11px;font-weight:600;letter-spacing:.8px;color:var(--muted);text-transform:uppercase;margin-bottom:2px}
 .chart-sub{font-size:10px;color:rgba(100,116,139,.4);margin-bottom:14px}
 .table-card{background:var(--bg2);border:1px solid var(--border);border-radius:14px;overflow:hidden;margin-bottom:24px}
 .table-hdr{padding:14px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.btn-print{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:7px;border:1px solid var(--border);background:var(--bg3);color:var(--text);font-size:11px;font-weight:600;font-family:"Space Grotesk",sans-serif;cursor:pointer;transition:.2s;white-space:nowrap}
+.btn-print:hover{border-color:var(--accent);color:var(--accent)}
+.btn-print:disabled{opacity:.5;cursor:not-allowed}
 .table-hdr h3{font-size:13px;font-weight:600}
 .table-meta{font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace}
 .tbl-wrap{overflow-x:auto;max-height:400px;overflow-y:auto}
@@ -81,12 +91,16 @@ thead th{position:sticky;top:0;z-index:10;padding:8px;text-align:center;font-siz
 .tin{background:#faf5ff;color:#a78bfa}.ta{background:#fffbeb;color:#f59e0b}
 .td{background:#f8fafc;color:var(--accent)}.tk{background:#f0fdf4;color:#059669}
 .te{background:#fff7ed;color:#f97316}
+/* NEW: network table header colors */
+.tn{background:#fefce8;color:#f59e0b}.tp{background:#ecfdf5;color:#10b981}
 tbody tr{border-bottom:1px solid rgba(30,45,69,.45);transition:.12s}
 tbody tr:hover{background:rgba(2,132,199,.06)}
 tbody td{padding:6px 8px;text-align:center;font-family:'JetBrains Mono',monospace;font-size:10.5px}
 .ci{color:var(--muted)}.ct{color:var(--muted)}.ce{color:#f87171}.cd{color:#60a5fa}
 .cm{color:#34d399}.cr{color:#c4b5fd}.ca{color:#fbbf24}.cms{color:var(--accent)}
 .con{color:#059669;font-weight:700}.cof{color:var(--muted)}.cor{color:#ea580c;font-weight:700}
+/* network table cell colors */
+.clat{color:#f59e0b;font-weight:600}.cpdr{color:#10b981;font-weight:600}.cpdr-bad{color:#ef4444;font-weight:600}
 tbody tr.nr td{animation:flashRow .9s ease}
 .mu-bars{display:flex;flex-direction:column;gap:8px}
 .mu-row{display:flex;align-items:center;gap:8px}
@@ -99,9 +113,7 @@ tbody tr.nr td{animation:flashRow .9s ease}
 .hm-name{font-size:8px;color:var(--muted);font-weight:600;letter-spacing:.4px}
 .hm-val{font-size:15px;font-weight:700;font-family:'JetBrains Mono',monospace;margin:1px 0}
 .hm-out{font-size:8px;color:var(--muted)}
-/* exhaust heatmap 3-col single row */
 .heatmap-exhaust{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-bottom:14px}
-/* section toggle */
 .view-nutrient,.view-exhaust{display:none}
 .view-nutrient.active,.view-exhaust.active{display:block}
 .toast{position:fixed;bottom:20px;right:20px;z-index:999;background:var(--bg3);border:1px solid var(--border);padding:10px 18px;border-radius:9px;font-size:11px;font-family:'JetBrains Mono',monospace;display:none;align-items:center;gap:7px;box-shadow:0 8px 28px rgba(0,0,0,.4)}
@@ -127,6 +139,12 @@ tbody tr.nr td{animation:flashRow .9s ease}
 @keyframes fadeIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
 @keyframes flashRow{0%{background:rgba(2,132,199,.12)}100%{background:transparent}}
 ::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+/* ── NETWORK STATUS BADGE ── */
+.net-status-badge{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:8px;font-size:10px;font-weight:700;font-family:'JetBrains Mono',monospace;background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.25);color:#10b981}
+.net-status-badge.warn{background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.3);color:#f59e0b}
+.net-status-badge.bad{background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.3);color:#ef4444}
+.net-status-dot{width:5px;height:5px;border-radius:50%;background:currentColor}
 
 /* ── CONTROL PANEL ── */
 .ctrl-panel{background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px 24px;margin-bottom:24px}
@@ -162,28 +180,39 @@ tbody tr.nr td{animation:flashRow .9s ease}
 .firebase-status{font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--muted);margin-top:8px}
 .firebase-status.ok{color:#059669}.firebase-status.fail{color:#dc2626}
 
-/* Dark mode explicit overrides untuk elemen dengan hardcoded colors */
-[data-theme="dark"] .kpi-val { /* inherits dari kpi class */ }
-[data-theme="dark"] tr:hover { background: rgba(0,212,255,.025); }
-[data-theme="dark"] .firebase-status.ok  { color: #34d399; }
-[data-theme="dark"] .firebase-status.fail{ color: #f87171; }
-[data-theme="dark"] .act-status.active   { color: #34d399; }
-[data-theme="dark"] .mode-current.auto   { color: #34d399; }
-[data-theme="dark"] .mode-current.manual { color: #fbbf24; }
-[data-theme="dark"] .con { color: #34d399; }
-[data-theme="dark"] .cor { color: #f97316; }
-[data-theme="dark"] .ntab.active.exhaust  { background: #f97316; border-color: #f97316; }
-[data-theme="dark"] .kpi.ppm .kpi-val  { color: #f59e0b; }
-[data-theme="dark"] .kpi.err .kpi-val  { color: #ef4444; }
-[data-theme="dark"] .kpi.derr .kpi-val { color: #60a5fa; }
-[data-theme="dark"] .kpi.dur .kpi-val  { color: #a78bfa; }
-[data-theme="dark"] .kpi.pump .kpi-val { color: #a78bfa; }
-[data-theme="dark"] .kpi.temp .kpi-val { color: #f97316; }
-[data-theme="dark"] .kpi.hum .kpi-val  { color: #60a5fa; }
-[data-theme="dark"] .kpi.exh .kpi-val  { color: #a78bfa; }
-[data-theme="dark"] .kpi.fan .kpi-val  { color: #34d399; }
-[data-theme="dark"] .kpi.total .kpi-val{ color: #00d4ff; }
-[data-theme="dark"] .firebase-status   { background: rgba(30,45,69,.4); }
+[data-theme="dark"] tr:hover{background:rgba(0,212,255,.025)}
+[data-theme="dark"] .firebase-status.ok{color:#34d399}
+[data-theme="dark"] .firebase-status.fail{color:#f87171}
+[data-theme="dark"] .act-status.active{color:#34d399}
+[data-theme="dark"] .mode-current.auto{color:#34d399}
+[data-theme="dark"] .mode-current.manual{color:#fbbf24}
+[data-theme="dark"] .con{color:#34d399}
+[data-theme="dark"] .cor{color:#f97316}
+[data-theme="dark"] .ntab.active.exhaust{background:#f97316;border-color:#f97316}
+[data-theme="dark"] .kpi.ppm .kpi-val{color:#f59e0b}
+[data-theme="dark"] .kpi.err .kpi-val{color:#ef4444}
+[data-theme="dark"] .kpi.derr .kpi-val{color:#60a5fa}
+[data-theme="dark"] .kpi.dur .kpi-val{color:#a78bfa}
+[data-theme="dark"] .kpi.pump .kpi-val{color:#a78bfa}
+[data-theme="dark"] .kpi.temp .kpi-val{color:#f97316}
+[data-theme="dark"] .kpi.hum .kpi-val{color:#60a5fa}
+[data-theme="dark"] .kpi.exh .kpi-val{color:#a78bfa}
+[data-theme="dark"] .kpi.fan .kpi-val{color:#34d399}
+[data-theme="dark"] .kpi.total .kpi-val{color:#00d4ff}
+[data-theme="dark"] .kpi.latency .kpi-val{color:#fbbf24}
+[data-theme="dark"] .kpi.pdr .kpi-val{color:#34d399}
+[data-theme="dark"] .kpi.lat-min .kpi-val{color:#93c5fd}
+[data-theme="dark"] .kpi.lat-max .kpi-val{color:#f87171}
+[data-theme="dark"] .firebase-status{background:rgba(30,45,69,.4)}
+[data-theme="dark"] .tn{background:#1a1506;color:#fbbf24}
+[data-theme="dark"] .tp{background:#061a10;color:#34d399}
+[data-theme="dark"] .ti{background:#0d1626;color:#60a5fa}
+[data-theme="dark"] .tf{background:#061a10;color:#34d399}
+[data-theme="dark"] .tin{background:#130d26;color:#c4b5fd}
+[data-theme="dark"] .ta{background:#1a1506;color:#fbbf24}
+[data-theme="dark"] .td{background:#0d1826;color:#00d4ff}
+[data-theme="dark"] .tk{background:#061a10;color:#34d399}
+[data-theme="dark"] .te{background:#1a0d06;color:#f97316}
 </style>
 </head>
 <body>
@@ -210,7 +239,7 @@ tbody tr.nr td{animation:flashRow .9s ease}
       <div class="fg">
         <label>🌡 Node Exhaust (pisah koma)</label>
         <input id="i-exhaust" value="1,2" placeholder="1,2">
-        <div class="hint">Node dengan sensor suhu/humidity</div>
+        <div class="hint">Node dengan sensor suhu/humidity + PDR/Latency</div>
       </div>
       <div class="fg">
         <label>💧 Node Nutrient (pisah koma)</label>
@@ -225,7 +254,7 @@ tbody tr.nr td{animation:flashRow .9s ease}
     <button class="btn-go" onclick="startApp()">🔌 Hubungkan ke Firebase</button>
     <div class="err-msg" id="errMsg"></div>
     <div class="setup-note">
-      ⚠️ Pastikan Firebase Rules sudah <code>".read": true, ".write": true</code> untuk <code>/fuzzy_log</code> dan <code>/nodes</code><br>
+      ⚠️ Pastikan Firebase Rules sudah <code>".read": true, ".write": true</code> untuk <code>/fuzzy_log</code>, <code>/nodes</code>, dan <code>/testing</code><br>
       <a href="https://console.firebase.google.com" target="_blank">Firebase Console</a> → Realtime Database → Rules
     </div>
   </div>
@@ -263,11 +292,9 @@ tbody tr.nr td{animation:flashRow .9s ease}
       <div class="kpi total"><div class="kpi-label">Total Record</div><div class="kpi-val" id="N-total">0</div><div class="kpi-sub" id="N-total-sub">+0 baru</div></div>
     </div>
 
-
     <div class="sec-title">🎛️ Panel Kontrol — Node Nutrient</div>
     <div class="ctrl-panel">
       <div class="ctrl-grid">
-        <!-- BLOK MODE KONTROL -->
         <div class="ctrl-block">
           <div class="ctrl-block-title">⚙️ Mode Kontrol</div>
           <div class="mode-row">
@@ -290,7 +317,6 @@ tbody tr.nr td{animation:flashRow .9s ease}
           </div>
           <div class="firebase-status" id="N-ctrlFirebase">⏳ Belum ada pengiriman</div>
         </div>
-        <!-- BLOK SETPOINT -->
         <div class="ctrl-block">
           <div class="ctrl-block-title">🎯 Setpoint PPM</div>
           <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Nilai target konsentrasi nutrisi yang akan dicapai sistem</div>
@@ -338,9 +364,58 @@ tbody tr.nr td{animation:flashRow .9s ease}
       </div>
     </div>
 
+    <div class="sec-title">📉 Grafik Stabilitas TDS</div>
+    <div class="chart-card" style="margin-bottom:24px">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px">
+        <div>
+          <div class="chart-title" id="N-stabTitle">Stabilitas PPM — Sampling 30 Menit</div>
+          <div class="chart-sub">PPM Average per interval · <span id="N-stabInfo" style="color:var(--accent)">Menghitung...</span></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <select id="N-stabInterval" onchange="updateStabilityChart(currentNode)" style="padding:4px 10px;border-radius:7px;border:1px solid var(--border);background:var(--bg3);color:var(--text);font-size:11px;font-family:'Space Grotesk',sans-serif;cursor:pointer">
+            <option value="5">Sampling 10 mnt</option>
+            <option value="15" selected>Sampling 30 mnt</option>
+            <option value="30">Sampling 1 jam</option>
+          </select>
+          <select id="N-stabLabelStep" onchange="updateStabilityChart(currentNode)" style="padding:4px 10px;border-radius:7px;border:1px solid var(--border);background:var(--bg3);color:var(--text);font-size:11px;font-family:'Space Grotesk',sans-serif;cursor:pointer" title="Jarak label di sumbu X">
+            <option value="1">Label tiap 1 titik</option>
+            <option value="2" selected>Label tiap 2 titik</option>
+            <option value="4">Label tiap 4 titik</option>
+            <option value="8">Label tiap 8 titik</option>
+          </select>
+          <!-- TIME STRETCH: mengalikan label waktu sumbu X tanpa mengubah data -->
+          <button class="btn-print" onclick="printChartAsJpg('N-chartStability')" style="padding:4px 10px;font-size:10px">⬇ JPG</button>
+        </div>
+      </div>
+      <!-- KPI mini stabilitas -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px" id="N-stabKpi">
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:10px 12px;text-align:center">
+          <div style="font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted)">PPM Average</div>
+          <div style="font-size:20px;font-weight:700;color:#d97706;margin:4px 0" id="N-stabAvg">–</div>
+          <div style="font-size:10px;color:var(--muted)">dalam window</div>
+        </div>
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:10px 12px;text-align:center">
+          <div style="font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted)">Std Deviasi</div>
+          <div style="font-size:20px;font-weight:700;color:#7c3aed;margin:4px 0" id="N-stabStd">–</div>
+          <div style="font-size:10px;color:var(--muted)">± PPM</div>
+        </div>
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:10px 12px;text-align:center">
+          <div style="font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted)">Min – Max</div>
+          <div style="font-size:16px;font-weight:700;color:#2563eb;margin:4px 0" id="N-stabRange">–</div>
+          <div style="font-size:10px;color:var(--muted)">rentang PPM</div>
+        </div>
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:10px 12px;text-align:center">
+          <div style="font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted)">Status Stabil</div>
+          <div style="font-size:16px;font-weight:700;margin:4px 0" id="N-stabStatus">–</div>
+          <div style="font-size:10px;color:var(--muted)" id="N-stabStatusSub">std &lt; 50 = stabil</div>
+        </div>
+      </div>
+      <div style="height:260px"><canvas id="N-chartStability"></canvas></div>
+    </div>
+
     <div class="sec-title">🗂️ Tabel Proses Fuzzy — Nutrient</div>
-    <div class="table-card">
-      <div class="table-hdr"><h3>Log Komputasi Fuzzy Nutrient</h3><div class="table-meta" id="N-tblMeta">Menunggu data...</div></div>
+    <div class="table-card" id="N-fuzzy-card">
+      <div class="table-hdr"><h3>Log Komputasi Fuzzy Nutrient</h3><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div class="table-meta" id="N-tblMeta">Menunggu data...</div><button class="btn-print" onclick="printTableAsJpg('N-fuzzy-card','Fuzzy_Nutrient_Node'+currentNode)">⬇ Simpan JPG</button></div></div>
       <div class="tbl-wrap">
         <table>
           <thead>
@@ -381,6 +456,48 @@ tbody tr.nr td{animation:flashRow .9s ease}
       <div class="kpi exh"><div class="kpi-label">Status Exhaust</div><div class="kpi-val" id="E-status">–</div><div class="kpi-sub" id="E-status-sub">–</div></div>
       <div class="kpi fan"><div class="kpi-label">Fan Aktif</div><div class="kpi-val" id="E-fan">–</div><div class="kpi-sub" id="E-fan-sub">–</div></div>
       <div class="kpi total"><div class="kpi-label">Total Record</div><div class="kpi-val" id="E-total">0</div><div class="kpi-sub" id="E-total-sub">+0 baru</div></div>
+    </div>
+
+    <!-- ══ PDR & LATENCY KPI ══ -->
+    <div class="sec-title">📡 Monitoring Jaringan — PDR & Latency</div>
+    <div class="kpi-strip" style="grid-template-columns:repeat(7,1fr)">
+      <div class="kpi latency">
+        <div class="kpi-label">Latency Terkini</div>
+        <div class="kpi-val" id="E-latency">–</div>
+        <div class="kpi-sub" id="E-latency-sub">ms</div>
+        <div class="kpi-bar"><div class="kpi-bar-fill" id="E-latency-bar" style="width:0%;background:#f59e0b"></div></div>
+      </div>
+      <div class="kpi lat-min">
+        <div class="kpi-label">Latency Min</div>
+        <div class="kpi-val" id="E-lat-min">–</div>
+        <div class="kpi-sub">ms historis</div>
+      </div>
+      <div class="kpi lat-max">
+        <div class="kpi-label">Latency Max</div>
+        <div class="kpi-val" id="E-lat-max">–</div>
+        <div class="kpi-sub">ms historis</div>
+      </div>
+      <div class="kpi pdr">
+        <div class="kpi-label">PDR (%)</div>
+        <div class="kpi-val" id="E-pdr">–</div>
+        <div class="kpi-sub" id="E-pdr-sub">Packet Delivery Ratio</div>
+        <div class="kpi-bar"><div class="kpi-bar-fill" id="E-pdr-bar" style="width:0%;background:#10b981"></div></div>
+      </div>
+      <div class="kpi" style="--kc:#a78bfa">
+        <div class="kpi-label">Pkt Sent</div>
+        <div class="kpi-val" id="E-pkt-sent" style="color:#a78bfa">–</div>
+        <div class="kpi-sub" id="E-pkt-sent-sub">total dikirim</div>
+      </div>
+      <div class="kpi" style="--kc:#34d399">
+        <div class="kpi-label">Pkt Received</div>
+        <div class="kpi-val" id="E-pkt-recv" style="color:#34d399">–</div>
+        <div class="kpi-sub" id="E-pkt-recv-sub">diterima</div>
+      </div>
+      <div class="kpi" style="--kc:#94a3b8">
+        <div class="kpi-label">RSSI (dBm)</div>
+        <div class="kpi-val" id="E-rssi" style="color:#94a3b8">–</div>
+        <div class="kpi-sub" id="E-rssi-sub">kekuatan sinyal</div>
+      </div>
     </div>
 
     <div class="sec-title">🎛️ Panel Kontrol — Exhaust Fan</div>
@@ -424,7 +541,7 @@ tbody tr.nr td{animation:flashRow .9s ease}
         <div style="height:210px"><canvas id="E-chartStatus"></canvas></div>
       </div>
     </div>
-    <div class="charts-grid g22" style="margin-bottom:24px">
+    <div class="charts-grid g22" style="margin-bottom:16px">
       <div class="chart-card">
         <div class="chart-title">Keanggotaan Fuzzy (μ)</div>
         <div class="chart-sub">Derajat keanggotaan suhu & kelembaban</div>
@@ -439,9 +556,29 @@ tbody tr.nr td{animation:flashRow .9s ease}
       </div>
     </div>
 
+    <!-- ══ PDR & LATENCY CHARTS ══ -->
+    <div class="sec-title">📡 Grafik Jaringan — PDR & Latency</div>
+    <div class="charts-grid" style="grid-template-columns:1fr 1fr 1fr;margin-bottom:24px">
+      <div class="chart-card">
+        <div class="chart-title">Latency (ms)</div>
+        <div class="chart-sub">t_send_ms vs t_receive_ms — /testing/latency/node_X</div>
+        <div style="height:210px"><canvas id="E-chartLatency"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">PDR — Packet Delivery Ratio (%)</div>
+        <div class="chart-sub">pdr_percentage per sesi — /testing/pdr/node_X</div>
+        <div style="height:210px"><canvas id="E-chartPDR"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">RSSI (dBm) & Packets</div>
+        <div class="chart-sub">Kekuatan sinyal + sent/received per sesi</div>
+        <div style="height:210px"><canvas id="E-chartRSSI"></canvas></div>
+      </div>
+    </div>
+
     <div class="sec-title">🗂️ Tabel Proses Fuzzy — Exhaust</div>
-    <div class="table-card">
-      <div class="table-hdr"><h3>Log Komputasi Fuzzy Exhaust</h3><div class="table-meta" id="E-tblMeta">Menunggu data...</div></div>
+    <div class="table-card" id="E-fuzzy-card">
+      <div class="table-hdr"><h3>Log Komputasi Fuzzy Exhaust</h3><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div class="table-meta" id="E-tblMeta">Menunggu data...</div><button class="btn-print" onclick="printTableAsJpg('E-fuzzy-card','Fuzzy_Exhaust_Node'+currentNode)">⬇ Simpan JPG</button></div></div>
       <div class="tbl-wrap">
         <table>
           <thead>
@@ -471,6 +608,64 @@ tbody tr.nr td{animation:flashRow .9s ease}
         </table>
       </div>
     </div>
+
+    <!-- ══ PDR TABLE ══ -->
+    <div class="sec-title">🗂️ Tabel Detail PDR — <span id="E-pdrNodeLabel" style="color:var(--accent);text-transform:none;letter-spacing:0;font-size:11px;font-weight:700">Node –</span></div>
+    <div class="table-card" id="E-pdr-card" style="margin-bottom:20px">
+      <div class="table-hdr">
+        <h3>Log Packet Delivery Ratio</h3>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div class="table-meta" id="E-pdrTblMeta">Menunggu data...</div><button class="btn-print" onclick="printTableAsJpg('E-pdr-card','PDR_Node'+currentNode)">⬇ Simpan JPG</button></div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="ti">#</th>
+              <th class="ti">Waktu (ms)</th>
+              <th class="ti">Node ID</th>
+              <th class="tp">Sent</th>
+              <th class="tp">Received</th>
+              <th class="tp">Lost</th>
+              <th class="tp">PDR (%)</th>
+              <th class="tp">Status</th>
+            </tr>
+          </thead>
+          <tbody id="E-pdrTblBody">
+            <tr><td colspan="8" style="padding:40px;text-align:center;color:var(--muted)">⏳ Menunggu koneksi...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ══ LATENCY TABLE ══ -->
+    <div class="sec-title">🗂️ Tabel Detail Latency — <span id="E-latNodeLabel" style="color:var(--accent);text-transform:none;letter-spacing:0;font-size:11px;font-weight:700">Node –</span></div>
+    <div class="table-card" id="E-lat-card">
+      <div class="table-hdr">
+        <h3>Log Latency &amp; Kekuatan Sinyal</h3>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div class="table-meta" id="E-latTblMeta">Menunggu data...</div><button class="btn-print" onclick="printTableAsJpg('E-lat-card','Latency_Node'+currentNode)">⬇ Simpan JPG</button></div>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="ti">#</th>
+              <th class="ti">Waktu (ms)</th>
+              <th class="ti">Node ID</th>
+              <th class="tn">t_send (ms)</th>
+              <th class="tn">t_receive (ms)</th>
+              <th class="tn">Latency (ms)</th>
+              <th class="tn">Status</th>
+              <th class="ti">Seq No</th>
+              <th class="ti">RSSI (dBm)</th>
+              <th class="ti">Kualitas Sinyal</th>
+            </tr>
+          </thead>
+          <tbody id="E-latTblBody">
+            <tr><td colspan="10" style="padding:40px;text-align:center;color:var(--muted)">⏳ Menunggu koneksi...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </main>
 
@@ -483,6 +678,16 @@ tbody tr.nr td{animation:flashRow .9s ease}
 let db, currentNode, MAX = 50;
 const store     = {}; // store[nid] = { rows, newCount, attached, lastTs, type }
 const nodeTypes = {}; // nodeTypes[nid] = 'nutrient' | 'exhaust'
+
+// ══ NEW: Network store per node ══
+// netStore[nid] = { latency: [...], pdr: [...], latAttached: false, pdrAttached: false }
+const netStore  = {};
+
+function ensureNetStore(nid) {
+  if (!netStore[nid]) {
+    netStore[nid] = { latency: [], pdr: [], latAttached: false, pdrAttached: false };
+  }
+}
 
 // ═══════════════════════════════════
 // CHART INSTANCES
@@ -562,6 +767,98 @@ function initCharts() {
       label: l, data: [], borderColor: MC6e[i], backgroundColor: MC6e[i]+'15',
       borderWidth: 1.5, fill: false, tension: .4, pointRadius: 1.5, borderDash: i >= 3 ? [4,3] : []
     }))}, options: baseOpt('μ (0–1)') });
+
+  // ── Latency Chart ──
+  charts.eLatency = new Chart(document.getElementById('E-chartLatency'), { type: 'line',
+    data: { labels: [], datasets: [
+      { label: 'Latency (ms)', data: [], borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,.12)', borderWidth: 2, fill: true, tension: .4, pointRadius: 3, pointBackgroundColor: '#f59e0b' }
+    ]},
+    options: Object.assign(baseOpt('ms'), {
+      scales: {
+        x: { grid:{color:'rgba(203,213,225,.5)'}, ticks:{color:'#64748b',font:{size:8.5},maxTicksLimit:10} },
+        y: { grid:{color:'rgba(203,213,225,.5)'}, ticks:{color:'#64748b',font:{size:8.5}},
+             title:{display:true,text:'Latency (ms)',color:'#f59e0b',font:{size:8.5}}, min:0 }
+      }
+    })
+  });
+
+  // ── PDR Chart — 3 dataset: pdr_percentage + packets sent + received ──
+  charts.ePDR = new Chart(document.getElementById('E-chartPDR'), { type: 'line',
+    data: { labels: [], datasets: [
+      { label: 'PDR (%)', data: [], borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,.12)', borderWidth: 2.5, fill: true, tension: .4, pointRadius: 3, yAxisID: 'y' },
+      { label: 'Pkt Sent', data: [], borderColor: '#a78bfa', backgroundColor: 'transparent', borderWidth: 1.5, borderDash:[4,3], fill: false, tension: .3, pointRadius: 2, yAxisID: 'y2' },
+      { label: 'Pkt Recv', data: [], borderColor: '#60a5fa', backgroundColor: 'transparent', borderWidth: 1.5, borderDash:[2,2], fill: false, tension: .3, pointRadius: 2, yAxisID: 'y2' }
+    ]},
+    options: Object.assign(baseOpt('%'), {
+      scales: {
+        x:  { grid:{color:'rgba(203,213,225,.5)'}, ticks:{color:'#64748b',font:{size:8.5},maxTicksLimit:10} },
+        y:  { grid:{color:'rgba(203,213,225,.5)'}, ticks:{color:'#64748b',font:{size:8.5}},
+              title:{display:true,text:'PDR (%)',color:'#10b981',font:{size:8.5}}, min:0, max:100 },
+        y2: { position:'right', grid:{display:false}, ticks:{color:'#a78bfa',font:{size:8.5}},
+              title:{display:true,text:'Packets',color:'#a78bfa',font:{size:8.5}}, min:0 }
+      }
+    })
+  });
+
+  // ── RSSI Chart ──
+  charts.eRSSI = new Chart(document.getElementById('E-chartRSSI'), { type: 'line',
+    data: { labels: [], datasets: [
+      { label: 'RSSI (dBm)', data: [], borderColor: '#94a3b8', backgroundColor: 'rgba(148,163,184,.1)', borderWidth: 2, fill: true, tension: .4, pointRadius: 3, pointBackgroundColor: '#94a3b8' }
+    ]},
+    options: Object.assign(baseOpt('dBm'), {
+      scales: {
+        x: { grid:{color:'rgba(203,213,225,.5)'}, ticks:{color:'#64748b',font:{size:8.5},maxTicksLimit:10} },
+        y: { grid:{color:'rgba(203,213,225,.5)'}, ticks:{color:'#64748b',font:{size:8.5}},
+             title:{display:true,text:'RSSI (dBm)',color:'#94a3b8',font:{size:8.5}} }
+      }
+    })
+  });
+
+  // ── Stability Chart — PPM 12 jam, sampling 30 menit ──
+  charts.nStability = new Chart(document.getElementById('N-chartStability'), { type: 'line',
+    data: { labels: [], datasets: [
+      { label: 'PPM Average', data: [], borderColor: '#d97706', backgroundColor: 'rgba(217,119,6,.1)',
+        borderWidth: 2.5, fill: true, tension: .4, pointRadius: 3, pointBackgroundColor: '#d97706' },
+      { label: 'Setpoint', data: [], borderColor: '#059669', backgroundColor: 'transparent',
+        borderWidth: 1.5, borderDash: [6,4], fill: false, tension: 0, pointRadius: 0 },
+      { label: '+1 Std Dev', data: [], borderColor: 'rgba(124,58,237,.4)', backgroundColor: 'rgba(124,58,237,.06)',
+        borderWidth: 1, borderDash: [3,3], fill: '+1', tension: .4, pointRadius: 0 },
+      { label: '−1 Std Dev', data: [], borderColor: 'rgba(124,58,237,.4)', backgroundColor: 'transparent',
+        borderWidth: 1, borderDash: [3,3], fill: false, tension: .4, pointRadius: 0 }
+    ]},
+    options: Object.assign(baseOpt('PPM'), {
+      plugins: {
+        legend: { labels: { color: '#64748b', font: { size: 9.5 }, boxWidth: 9, padding: 10 } },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              if (ctx.datasetIndex === 0) return ' PPM rata-rata: ' + ctx.parsed.y.toFixed(1);
+              if (ctx.datasetIndex === 1) return ' Setpoint: ' + ctx.parsed.y.toFixed(0);
+              return '';
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { color:'rgba(203,213,225,.5)' },
+          ticks: {
+            color: '#64748b',
+            font:  { size: 8.5 },
+            // Hanya tampilkan tick di label yang tidak kosong
+            callback: function(val, idx) {
+              const lbl = this.getLabelForValue(val);
+              return lbl && lbl !== '' ? lbl : null;
+            },
+            maxRotation: 0,
+            autoSkip: false  // jangan auto-skip, kita yang atur manual via labelStep
+          }
+        },
+        y: { grid:{color:'rgba(203,213,225,.5)'}, ticks:{color:'#64748b',font:{size:8.5}},
+             title:{display:true,text:'PPM',color:'#d97706',font:{size:8.5}}, min:0 }
+      }
+    })
+  });
 }
 
 // ═══════════════════════════════════
@@ -593,9 +890,9 @@ function startApp() {
 
   document.getElementById('setupOverlay').style.display = 'none';
   initCharts();
-  // Apply chart theme setelah charts dibuat
   applyChartTheme(document.documentElement.getAttribute('data-theme') || 'light');
   applyKpiTheme(document.documentElement.getAttribute('data-theme') || 'light');
+  injectChartPrintButtons();
   buildTabs(allNodes);
   attach(currentNode);
 }
@@ -625,13 +922,16 @@ function switchNode(n) {
   if (tab) { tab.classList.add('active', nodeTypes[n]); }
   updateTypeBadge(nodeTypes[n]);
   attach(n);
-  // Setelah view ditampilkan, resize semua chart agar render benar
-  // (Chart.js gagal render saat canvas dalam elemen display:none)
   requestAnimationFrame(() => {
     Object.values(charts).forEach(c => { try { c.resize(); } catch(e){} });
     if (store[n] && store[n].rows.length) renderAll(n);
     if (nodeTypes[n] === 'nutrient') renderControlPanel(n);
-  if (nodeTypes[n] === 'exhaust')  renderExhaustControlPanel(n);
+    if (nodeTypes[n] === 'nutrient') updateStabilityChart(n);
+    if (nodeTypes[n] === 'exhaust')  {
+      renderExhaustControlPanel(n);
+      // Render network data jika sudah ada
+      if (netStore[n]) renderNetworkData(n);
+    }
   });
 }
 
@@ -639,7 +939,6 @@ function updateTypeBadge(type) {
   const badge = document.getElementById('typeBadge');
   badge.className = 'type-badge ' + type;
   badge.textContent = type === 'exhaust' ? '🌡 EXHAUST' : '💧 NUTRIENT';
-  // toggle views
   document.getElementById('viewNutrient').className = 'view-nutrient' + (type === 'nutrient' ? ' active' : '');
   document.getElementById('viewExhaust').className  = 'view-exhaust'  + (type === 'exhaust'  ? ' active' : '');
 }
@@ -655,8 +954,6 @@ function attach(nid) {
   const path = '/fuzzy_log/node_' + nid;
   let firstLoad = true;
 
-  // on('value') + limitToLast — Firebase akan panggil ulang setiap ada data baru
-  // Ini bekerja terlepas dari format timestamp (millis ESP32 vs Unix timestamp)
   db.ref(path).orderByChild('timestamp').limitToLast(MAX)
     .on('value', snap => {
       setConn('live');
@@ -667,7 +964,55 @@ function attach(nid) {
         return;
       }
 
-      const rows = Object.values(snap.val()).sort((a,b) => (a.timestamp||0)-(b.timestamp||0));
+      const rawRows = Object.values(snap.val()).sort((a,b) => (a.timestamp||0)-(b.timestamp||0));
+
+      // ── Deteksi restart ESP32 ──
+      // ESP32 restart → millis() mulai dari 0 lagi → timestamp turun drastis
+      // Tandai baris pertama setiap sesi baru dengan flag .sessionStart = true
+      // dan .sessionIdx untuk warna/label berbeda di grafik
+      let sessionIdx = 0;
+      for (let i = 0; i < rawRows.length; i++) {
+        if (i === 0) {
+          rawRows[i]._sessionIdx = 0;
+          rawRows[i]._sessionStart = true;
+        } else {
+          const prev = rawRows[i-1].timestamp || 0;
+          const curr = rawRows[i].timestamp   || 0;
+          // Jika timestamp turun > 60 detik (60000ms) → tanda restart
+          if (curr < prev - 60000) {
+            sessionIdx++;
+            rawRows[i]._sessionStart = true;
+          } else {
+            rawRows[i]._sessionStart = false;
+          }
+          rawRows[i]._sessionIdx = sessionIdx;
+        }
+      }
+
+      // Urutkan ulang: dalam setiap sesi urut by timestamp,
+      // tapi sesi terbaru (sessionIdx terbesar) selalu di kanan grafik
+      // Caranya: offset timestamp tiap sesi agar tidak overlap
+      let sessionOffsets = {};
+      let maxTsPerSession = {};
+      rawRows.forEach(r => {
+        const si = r._sessionIdx;
+        if (!(si in maxTsPerSession)) maxTsPerSession[si] = 0;
+        maxTsPerSession[si] = Math.max(maxTsPerSession[si], r.timestamp || 0);
+      });
+      // Hitung offset: sesi i mulai setelah max ts sesi i-1 + gap 60s
+      let cumOffset = 0;
+      for (let si = 0; si <= sessionIdx; si++) {
+        sessionOffsets[si] = cumOffset;
+        cumOffset += (maxTsPerSession[si] || 0) + 60000;
+      }
+
+      // Terapkan offset ke timestamp virtual untuk sorting grafik
+      rawRows.forEach(r => {
+        r._virtualTs = (r.timestamp || 0) + sessionOffsets[r._sessionIdx];
+      });
+
+      const rows = rawRows.sort((a,b) => a._virtualTs - b._virtualTs);
+
       const prevLen = store[nid].rows.length;
       store[nid].rows = rows;
 
@@ -683,7 +1028,6 @@ function attach(nid) {
       }
 
       if (nid === currentNode) {
-        // Resize dulu sebelum render — penting jika view baru saja ditampilkan
         requestAnimationFrame(() => {
           Object.values(charts).forEach(c => { try { c.resize(); } catch(e){} });
           renderAll(nid);
@@ -692,8 +1036,269 @@ function attach(nid) {
 
     }, err => { setConn('err'); toast('Error stream: ' + err.message, 'err'); });
 
-  // Pasang listener kontrol (hanya untuk node nutrient)
+  // Pasang listener kontrol
   attachControlListener(nid);
+
+  // ══ NEW: Pasang listener PDR & Latency untuk node exhaust ══
+  if (nodeTypes[nid] === 'exhaust') {
+    attachNetworkListeners(nid);
+  }
+}
+
+// ══════════════════════════════════════════════════
+// NETWORK LISTENERS — /testing/latency & /testing/pdr
+// Struktur latency: { latency_ms, node_id, rssi_dbm, sequence_no, status, t_receive_ms, t_send_ms, timestamp }
+// Struktur pdr:     { node_id, packets_lost, packets_received, packets_sent, pdr_percentage, status, timestamp }
+// ══════════════════════════════════════════════════
+function attachNetworkListeners(nid) {
+  ensureNetStore(nid);
+
+  // ── Latency Listener ──
+  if (!netStore[nid].latAttached) {
+    netStore[nid].latAttached = true;
+    db.ref('/testing/latency/node_' + nid).on('value', snap => {
+      if (!snap.exists()) { toast('Node ' + nid + ': belum ada data latency', 'exhaust'); return; }
+      const raw = snap.val();
+      // Setiap entry adalah object dengan field lengkap
+      const entries = Object.values(raw)
+        .filter(v => typeof v === 'object' && v !== null)
+        .map(v => ({
+          ts:          parseFloat(v.timestamp)   || 0,
+          latency_ms:  parseFloat(v.latency_ms)  || 0,
+          node_id:     v.node_id                 || nid,
+          rssi_dbm:    parseFloat(v.rssi_dbm)    || 0,
+          sequence_no: parseInt(v.sequence_no)   || 0,
+          status:      v.status                  || '–',
+          t_receive_ms:parseFloat(v.t_receive_ms)|| 0,
+          t_send_ms:   parseFloat(v.t_send_ms)   || 0,
+        }))
+        .sort((a,b) => a.ts - b.ts)
+        .slice(-MAX);
+
+      netStore[nid].latency = entries;
+      if (nid === currentNode) requestAnimationFrame(() => renderNetworkData(nid));
+    }, err => toast('Error latency: ' + err.message, 'err'));
+  }
+
+  // ── PDR Listener ──
+  if (!netStore[nid].pdrAttached) {
+    netStore[nid].pdrAttached = true;
+    db.ref('/testing/pdr/node_' + nid).on('value', snap => {
+      if (!snap.exists()) { toast('Node ' + nid + ': belum ada data PDR', 'exhaust'); return; }
+      const raw = snap.val();
+      const entries = Object.values(raw)
+        .filter(v => typeof v === 'object' && v !== null)
+        .map(v => ({
+          ts:               parseFloat(v.timestamp)        || 0,
+          node_id:          v.node_id                      || nid,
+          packets_lost:     parseInt(v.packets_lost)       || 0,
+          packets_received: parseInt(v.packets_received)   || 0,
+          packets_sent:     parseInt(v.packets_sent)       || 0,
+          pdr_percentage:   parseFloat(v.pdr_percentage)   || 0,
+          status:           v.status                       || '–',
+        }))
+        .sort((a,b) => a.ts - b.ts)
+        .slice(-MAX);
+
+      netStore[nid].pdr = entries;
+      if (nid === currentNode) requestAnimationFrame(() => renderNetworkData(nid));
+    }, err => toast('Error PDR: ' + err.message, 'err'));
+  }
+}
+
+// ── Render semua network data ──
+
+// ── 2 angka paling depan untuk tampilan latency ──
+// Contoh: 1234→"12", 87→"87", 234→"23", 56→"56", 5→"5"
+function sig2lat(n) {
+  if (n === null || n === undefined || isNaN(n)) return '–';
+  n = Math.round(n);
+  if (n === 0) return '0';
+  const str = String(n);
+  if (str.length <= 2) return str;
+  // Ambil 2 digit pertama lalu bulatkan digit ketiga
+  const factor = Math.pow(10, str.length - 2);
+  return String(Math.round(n / factor) * factor).slice(0, 2);
+}
+
+function renderNetworkData(nid) {
+  ensureNetStore(nid);
+  const ns = netStore[nid];
+  const nodeLabel = 'Node ' + nid;
+
+  // Update semua label node
+  ['E-pdrNodeLabel','E-latNodeLabel'].forEach(id => s(id, nodeLabel));
+
+  // ── KPI Latency ──
+  const latRows = ns.latency;
+  if (latRows.length > 0) {
+    const last    = latRows[latRows.length - 1];
+    const allLat  = latRows.map(r => r.latency_ms);
+    const minLat  = Math.min(...allLat);
+    const maxLat  = Math.max(...allLat);
+
+    s('E-latency',     sig2lat(last.latency_ms));
+    s('E-latency-sub', latQualityLabel(parseInt(sig2lat(last.latency_ms))));
+    sw('E-latency-bar', Math.min(parseInt(sig2lat(last.latency_ms)) / 300 * 100, 100) + '%');
+    s('E-lat-min', sig2lat(minLat));
+    s('E-lat-max', sig2lat(maxLat));
+    s('E-rssi',    last.rssi_dbm.toFixed(0));
+    s('E-rssi-sub', rssiQualityLabel(last.rssi_dbm));
+
+    // Chart Latency — latency_ms garis utama
+    const latLabels = latRows.map(r => formatNetTs(r.ts));
+    charts.eLatency.data.labels = latLabels;
+    charts.eLatency.data.datasets[0].data = latRows.map(r => r.latency_ms);
+    charts.eLatency.update('none');
+
+    // Chart RSSI + packets sent (dari PDR jika ada)
+    charts.eRSSI.data.labels = latLabels;
+    charts.eRSSI.data.datasets[0].data = latRows.map(r => r.rssi_dbm);
+    charts.eRSSI.update('none');
+  }
+
+  // ── KPI PDR ──
+  const pdrRows = ns.pdr;
+  if (pdrRows.length > 0) {
+    const last = pdrRows[pdrRows.length - 1];
+    s('E-pdr',          last.pdr_percentage.toFixed(1));
+    s('E-pdr-sub',      pdrQualityLabel(last.pdr_percentage));
+    sw('E-pdr-bar',     Math.min(last.pdr_percentage, 100) + '%');
+    s('E-pkt-sent',     last.packets_sent);
+    s('E-pkt-sent-sub', 'dikirim (sesi ini)');
+    s('E-pkt-recv',     last.packets_received);
+    s('E-pkt-recv-sub', last.packets_lost + ' lost');
+
+    // Chart PDR
+    const pdrLabels = pdrRows.map(r => formatNetTs(r.ts));
+    charts.ePDR.data.labels = pdrLabels;
+    charts.ePDR.data.datasets[0].data = pdrRows.map(r => r.pdr_percentage);
+    // Dataset packets_sent & received sebagai bar
+    charts.ePDR.data.datasets[1].data = pdrRows.map(r => r.packets_sent);
+    charts.ePDR.data.datasets[2].data = pdrRows.map(r => r.packets_received);
+    charts.ePDR.update('none');
+  }
+
+  // ── Render tabel PDR ──
+  renderPDRTable(nid);
+  // ── Render tabel Latency ──
+  renderLatencyTable(nid);
+}
+
+// ── Tabel PDR ──
+function renderPDRTable(nid) {
+  ensureNetStore(nid);
+  const rows = [...netStore[nid].pdr].reverse(); // terbaru di atas
+  const total = netStore[nid].pdr.length;
+  s('E-pdrTblMeta', 'Node ' + nid + ' | ' + total + ' record | path: /testing/pdr/node_' + nid);
+
+  const tbody = document.getElementById('E-pdrTblBody');
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="padding:30px;text-align:center;color:var(--muted)">Belum ada data PDR</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = rows.map((r, i) => {
+    const rowNum = total - i;
+    const pdrCls = r.pdr_percentage >= 80 ? 'cpdr' : 'cpdr-bad';
+    const lostCls = r.packets_lost === 0 ? 'cpdr' : 'cpdr-bad';
+    const nr = i === 0 ? 'nr' : '';
+    const statusColor = statusCssClass(r.status);
+    return '<tr class="' + nr + '">' +
+      '<td class="ci">'  + rowNum + '</td>' +
+      '<td class="ct">'  + formatNetTs(r.ts) + '</td>' +
+      '<td class="ci">'  + r.node_id + '</td>' +
+      '<td class="cr">'  + r.packets_sent + '</td>' +
+      '<td class="cpdr">'+ r.packets_received + '</td>' +
+      '<td class="' + lostCls + '">' + r.packets_lost + '</td>' +
+      '<td class="' + pdrCls + ' " style="font-size:12px;font-weight:700">' + r.pdr_percentage.toFixed(1) + '%</td>' +
+      '<td class="' + statusColor + '">' + r.status + '</td>' +
+      '</tr>';
+  }).join('');
+}
+
+// ── Tabel Latency ──
+function renderLatencyTable(nid) {
+  ensureNetStore(nid);
+  const rows = [...netStore[nid].latency].reverse(); // terbaru di atas
+  const total = netStore[nid].latency.length;
+  s('E-latTblMeta', 'Node ' + nid + ' | ' + total + ' record | path: /testing/latency/node_' + nid);
+
+  const tbody = document.getElementById('E-latTblBody');
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="10" style="padding:30px;text-align:center;color:var(--muted)">Belum ada data Latency</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = rows.map((r, i) => {
+    const rowNum   = total - i;
+    const latCls   = parseInt(sig2lat(r.latency_ms)) < 300 ? 'clat' : 'cpdr-bad';
+    const rssiCls  = r.rssi_dbm >= -70 ? 'cpdr' : r.rssi_dbm >= -85 ? 'clat' : 'cpdr-bad';
+    const nr       = i === 0 ? 'nr' : '';
+    const statusColor = statusCssClass(r.status);
+    return '<tr class="' + nr + '">' +
+      '<td class="ci">'   + rowNum + '</td>' +
+      '<td class="ct">'   + formatNetTs(r.ts) + '</td>' +
+      '<td class="ci">'   + r.node_id + '</td>' +
+      '<td class="cd">'   + r.t_send_ms.toFixed(0) + '</td>' +
+      '<td class="cd">'   + r.t_receive_ms.toFixed(0) + '</td>' +
+      '<td class="' + latCls + '" style="font-size:12px;font-weight:700">' + sig2lat(r.latency_ms) + '</td>' +
+      '<td class="' + statusColor + '">' + r.status + '</td>' +
+      '<td class="ci">'   + r.sequence_no + '</td>' +
+      '<td class="' + rssiCls + '">' + r.rssi_dbm.toFixed(0) + '</td>' +
+      '<td class="ct" style="font-size:10px">' + rssiQualityLabel(r.rssi_dbm) + '</td>' +
+      '</tr>';
+  }).join('');
+}
+
+// ── Helper status CSS class ──
+function statusCssClass(status) {
+  if (!status) return 'ci';
+  const s2 = status.toLowerCase();
+  if (s2 === 'excellent') return 'cpdr';
+  if (s2 === 'good')      return 'cpdr';
+  if (s2 === 'fair')      return 'clat';
+  if (s2 === 'poor')      return 'cpdr-bad';
+  if (s2 === 'bad')       return 'cpdr-bad';
+  return 'ci';
+}
+
+function formatNetTs(ts) {
+  if (!ts || ts === 0) return '–';
+  // millis ESP32 (uptime) — bukan unix timestamp
+  if (ts < 1e10) {
+    const sc = Math.floor(ts / 1000);
+    const h  = Math.floor(sc / 3600) % 24;
+    const m  = Math.floor((sc % 3600) / 60);
+    const sv = sc % 60;
+    return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(sv).padStart(2,'0');
+  }
+  // Unix timestamp ms
+  return new Date(ts).toLocaleTimeString('id-ID', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+
+function latQualityLabel(ms) {
+  if (ms < 50)  return '🟢 Sangat Baik (<50ms)';
+  if (ms < 150) return '🟡 Baik (<150ms)';
+  if (ms < 300) return '🟠 Sedang (<300ms)';
+  return '🔴 Buruk (>300ms)';
+}
+
+function pdrQualityLabel(pct) {
+  if (pct >= 95) return '🟢 Excellent (≥95%)';
+  if (pct >= 80) return '🟡 Good (≥80%)';
+  if (pct >= 60) return '🟠 Fair (≥60%)';
+  return '🔴 Poor (<60%)';
+}
+
+function rssiQualityLabel(dbm) {
+  if (dbm >= -60)  return '🟢 Sangat Kuat';
+  if (dbm >= -70)  return '🟡 Kuat';
+  if (dbm >= -80)  return '🟠 Sedang';
+  if (dbm >= -90)  return '🔴 Lemah';
+  return '⚫ Sangat Lemah';
 }
 
 function setConn(s) {
@@ -713,7 +1318,6 @@ function renderAll(nid) {
   const type = nodeTypes[nid];
   if (type === 'nutrient') renderNutrient(nid, rows);
   else                     renderExhaust(nid, rows);
-  // Update timestamp terakhir di header
   document.getElementById('ri').textContent = '⚡ ' + new Date().toLocaleTimeString('id-ID');
 }
 
@@ -731,7 +1335,9 @@ const N_MB = [{k:'mu_err_low',l:'μ Err Low',c:'#059669'},{k:'mu_err_medium',l:'
   {k:'mu_delta_stable',l:'μ Δ Stable',c:'#f97316'},{k:'mu_delta_increasing',l:'μ Δ Inc',c:'#67e8f9'}];
 
 function renderNutrient(nid, rows) {
-  const last = rows[rows.length-1];
+  // Ambil record terbaru berdasarkan _virtualTs (bukan index) agar
+  // setelah restart ESP32, PPM current tetap update dari data terbaru
+  const last = rows.reduce((a, b) => ((a._virtualTs||a.timestamp||0) > (b._virtualTs||b.timestamp||0) ? a : b));
   const inp = last.input||{}, dfc = last.defuzzifikasi||{};
   const ppm = gf(inp,'ppm'), sp = gf(inp,'setpoint')||800;
   const err = gf(inp,'error_pct'), derr = gf(inp,'delta_error');
@@ -748,7 +1354,14 @@ function renderNutrient(nid, rows) {
   sw('N-err-bar', Math.min(err,100)+'%');
   sw('N-derr-bar', Math.min(Math.abs(derr)/10*100,100)+'%');
 
-  const labs = rows.map(r => ts2t(r.timestamp||0));
+  // Gunakan _virtualTs untuk label — agar grafik selalu runtut kiri ke kanan
+  // walau ESP32 restart (timestamp reset ke 0)
+  const labs = rows.map(r => {
+    const ts = r.timestamp || 0;
+    // Label: tampilkan tanda [↺] di awal sesi baru (restart)
+    const prefix = r._sessionStart && r._sessionIdx > 0 ? '↺ ' : '';
+    return prefix + ts2tStretch(ts, 2);
+  });
   charts.nPPM.data.labels = labs;
   charts.nPPM.data.datasets[0].data = rows.map(r => gf(r.input||{},'ppm'));
   charts.nPPM.data.datasets[1].data = rows.map(r => gf(r.input||{},'setpoint')||800);
@@ -762,7 +1375,6 @@ function renderNutrient(nid, rows) {
   MK.forEach((k,i) => { charts.nMu.data.datasets[i].data = rows.map(r => gf(r.fuzzifikasi||{},k)); });
   charts.nMu.update('none');
 
-  // heatmap 9 rules
   const inf = last.inferensi||{};
   document.getElementById('N-heatmap').innerHTML = N_RK.map((k,i) => {
     const v = gf(inf,k), m = N_RM[i], p = Math.round(v*100);
@@ -776,14 +1388,14 @@ function renderNutrient(nid, rows) {
     return '<div class="mu-row"><div class="mu-label">'+m.l+'</div><div class="mu-bar"><div class="mu-fill" style="width:'+(v*100).toFixed(1)+'%;background:'+m.c+'"></div></div><div class="mu-val" style="color:'+m.c+'">'+v.toFixed(4)+'</div></div>';
   }).join('');
 
-  // Update setpoint aktif dari data sensor (node mengirim setpoint-nya)
   if (last.input && last.input.setpoint) {
     const spFromSensor = parseFloat(last.input.setpoint);
     ensureCtrlState(nid);
     if (spFromSensor > 0) ctrlState[nid].setpoint = spFromSensor;
   }
-  // Render panel kontrol jika node ini sedang aktif
   if (nid === currentNode) renderControlPanel(nid);
+  // Update grafik stabilitas setiap ada data baru
+  if (nid === currentNode) updateStabilityChart(nid);
 
   s('N-tblMeta','Node '+nid+' | '+rows.length+' record | +'+store[nid].newCount+' baru');
   const nRowsDesc = [...rows].reverse();
@@ -792,7 +1404,7 @@ function renderNutrient(nid, rows) {
     const pump=dfc.pump_active;
     const nr = i===0 ? 'nr' : '';
     const rowNum = rows.length - i;
-    return '<tr class="'+nr+'"><td class="ci">'+rowNum+'</td><td class="ct">'+ts2t(r.timestamp||0)+'</td>'+
+    return '<tr class="'+nr+'"><td class="ci">'+rowNum+'</td><td class="ct">'+ts2tStretch(r.timestamp||0, 2)+'</td>'+
       '<td class="ce">'+gf(inp,'error_pct').toFixed(2)+'</td><td class="cd">'+gf(inp,'delta_error').toFixed(3)+'</td>'+
       '<td class="cm">'+gf(fuz,'mu_err_low').toFixed(4)+'</td><td class="cm">'+gf(fuz,'mu_err_medium').toFixed(4)+'</td><td class="cm">'+gf(fuz,'mu_err_high').toFixed(4)+'</td>'+
       '<td class="cm">'+gf(fuz,'mu_delta_decreasing').toFixed(4)+'</td><td class="cm">'+gf(fuz,'mu_delta_stable').toFixed(4)+'</td><td class="cm">'+gf(fuz,'mu_delta_increasing').toFixed(4)+'</td>'+
@@ -820,7 +1432,7 @@ const E_MB = [
   {k:'mu_hum_normal',l:'μ Hum Normal',c:'#059669'},{k:'mu_hum_high',l:'μ Hum High',c:'#a78bfa'}];
 
 function renderExhaust(nid, rows) {
-  const last = rows[rows.length-1];
+  const last = rows.reduce((a, b) => ((a._virtualTs||a.timestamp||0) > (b._virtualTs||b.timestamp||0) ? a : b));
   const inp = last.input||{}, dfc = last.defuzzifikasi||{};
   const temp = gf(inp,'temperature'), hum = gf(inp,'humidity');
   const exhStatus = gf(dfc,'exhaust_status');
@@ -840,7 +1452,10 @@ function renderExhaust(nid, rows) {
   sw('E-temp-bar', Math.min((temp-20)/20*100,100)+'%');
   sw('E-hum-bar', Math.min(hum,100)+'%');
 
-  const labs = rows.map(r => ts2t(r.timestamp||0));
+  const labs = rows.map(r => {
+    const prefix = r._sessionStart && r._sessionIdx > 0 ? '↺ ' : '';
+    return prefix + ts2t(r.timestamp||0);
+  });
   charts.eTH.data.labels = labs;
   charts.eTH.data.datasets[0].data = rows.map(r => gf(r.input||{},'temperature'));
   charts.eTH.data.datasets[1].data = rows.map(r => gf(r.input||{},'humidity'));
@@ -853,7 +1468,6 @@ function renderExhaust(nid, rows) {
   MKe.forEach((k,i) => { charts.eMu.data.datasets[i].data = rows.map(r => gf(r.fuzzifikasi||{},k)); });
   charts.eMu.update('none');
 
-  // heatmap agregasi exhaust (3 output)
   const agg = last.agregasi||{};
   document.getElementById('E-heatmap').innerHTML = E_AGG.map(a => {
     const v = gf(agg, a.k), p = Math.round(v*100);
@@ -867,18 +1481,14 @@ function renderExhaust(nid, rows) {
     return '<div class="mu-row"><div class="mu-label">'+m.l+'</div><div class="mu-bar"><div class="mu-fill" style="width:'+(v*100).toFixed(1)+'%;background:'+m.c+'"></div></div><div class="mu-val" style="color:'+m.c+'">'+v.toFixed(4)+'</div></div>';
   }).join('');
 
-  // Render panel kontrol exhaust jika node ini sedang aktif
   if (nid === currentNode) renderExhaustControlPanel(nid);
 
   s('E-tblMeta','Node '+nid+' | '+rows.length+' record | +'+store[nid].newCount+' baru');
-  // Terbaru di baris paling atas — rows sudah urut asc, balik untuk display
   const rowsDesc = [...rows].reverse();
   document.getElementById('E-tblBody').innerHTML = rowsDesc.map((r,i) => {
     const inp=r.input||{},fuz=r.fuzzifikasi||{},inf2=r.inferensi||{},agg2=r.agregasi||{},dfc2=r.defuzzifikasi||{};
     const es=gf(dfc2,'exhaust_status'), fa=dfc2.fan_active;
-    // i===0 = baris terbaru → highlight
     const nr = i===0 ? 'nr' : '';
-    // Nomor urut: baris terbaru = rows.length, terlama = 1
     const rowNum = rows.length - i;
     const eLabel = ['MATI','SEDANG','MENYALA'][es] || String(es);
     const eCls = es===0?'cd':es===1?'ca':'ce';
@@ -895,17 +1505,14 @@ function renderExhaust(nid, rows) {
 
 
 // ═══════════════════════════════════════════════════════
-// CONTROL PANEL — Firebase Write ke /nodes/node_X/control
+// CONTROL PANEL — Firebase Write
 // ═══════════════════════════════════════════════════════
-
-// State kontrol per node (baca dari Firebase saat attach)
-const ctrlState = {}; // ctrlState[nid] = {manual_mode, actuator_command, setpoint}
+const ctrlState = {};
 
 function ensureCtrlState(nid) {
   if (!ctrlState[nid]) ctrlState[nid] = {manual_mode: false, actuator_command: false, setpoint: 800};
 }
 
-// Baca state kontrol dari Firebase (path /nodes/node_X/control)
 function attachControlListener(nid) {
   ensureCtrlState(nid);
   db.ref('/nodes/node_' + nid + '/control').on('value', snap => {
@@ -921,67 +1528,49 @@ function attachControlListener(nid) {
   });
 }
 
-// Render UI panel kontrol berdasarkan state Firebase
 function renderControlPanel(nid) {
   if (nodeTypes[nid] !== 'nutrient') return;
   ensureCtrlState(nid);
   const st = ctrlState[nid];
   const isManual = st.manual_mode;
 
-  // Mode text
   const modeEl = document.getElementById('N-modeText');
   if (modeEl) {
     modeEl.textContent = isManual ? 'OPEN LOOP' : 'CLOSE LOOP';
     modeEl.className = 'mode-current ' + (isManual ? 'manual' : 'auto');
   }
 
-  // Tombol relay manual — hanya aktif saat open loop
   const btnOn  = document.getElementById('N-btnOn');
   const btnOff = document.getElementById('N-btnOff');
   const actSt  = document.getElementById('N-actStatus');
   if (btnOn && btnOff) {
-    if (isManual) {
-      btnOn.classList.add('enabled');
-      btnOff.classList.add('enabled');
-    } else {
-      btnOn.classList.remove('enabled');
-      btnOff.classList.remove('enabled');
-    }
+    if (isManual) { btnOn.classList.add('enabled'); btnOff.classList.add('enabled'); }
+    else          { btnOn.classList.remove('enabled'); btnOff.classList.remove('enabled'); }
   }
   if (actSt) {
-    if (!isManual) {
-      actSt.textContent = '— fuzzy aktif';
-      actSt.className = 'act-status';
-    } else {
+    if (!isManual) { actSt.textContent = '— fuzzy aktif'; actSt.className = 'act-status'; }
+    else {
       actSt.textContent = st.actuator_command ? '● Relay ON' : '○ Relay OFF';
       actSt.className = 'act-status' + (st.actuator_command ? ' active' : '');
     }
   }
 
-  // Setpoint
   const spEl = document.getElementById('N-spCurrent');
   const spIn = document.getElementById('N-spInput');
   if (spEl) spEl.textContent = 'Setpoint aktif: ' + st.setpoint.toFixed(0) + ' PPM';
   if (spIn && document.activeElement !== spIn) spIn.value = st.setpoint.toFixed(0);
 }
 
-// Tulis mode ke Firebase
 async function setMode(nid, toManual) {
   if (nodeTypes[nid] !== 'nutrient') return;
   ensureCtrlState(nid);
   const statusEl = document.getElementById('N-ctrlFirebase');
   if (statusEl) { statusEl.textContent = '⏳ Mengirim...'; statusEl.className = 'firebase-status'; }
-
   try {
-    const path = '/nodes/node_' + nid + '/control';
-    // Jika beralih ke close loop, paksa actuator_command = false
     const updates = { manual_mode: toManual };
     if (!toManual) updates.actuator_command = false;
-    await db.ref(path).update(updates);
-    if (statusEl) {
-      statusEl.textContent = '✅ Mode ' + (toManual ? 'OPEN LOOP' : 'CLOSE LOOP') + ' dikirim';
-      statusEl.className = 'firebase-status ok';
-    }
+    await db.ref('/nodes/node_' + nid + '/control').update(updates);
+    if (statusEl) { statusEl.textContent = '✅ Mode ' + (toManual ? 'OPEN LOOP' : 'CLOSE LOOP') + ' dikirim'; statusEl.className = 'firebase-status ok'; }
     toast((toManual ? '⚠ Open Loop aktif — relay manual' : '✅ Close Loop aktif — fuzzy ON'), 'nutrient');
   } catch(e) {
     if (statusEl) { statusEl.textContent = '❌ Gagal: ' + e.message; statusEl.className = 'firebase-status fail'; }
@@ -989,22 +1578,15 @@ async function setMode(nid, toManual) {
   }
 }
 
-// Tulis aktuator ke Firebase (hanya saat manual mode)
 async function setActuator(nid, state) {
   if (nodeTypes[nid] !== 'nutrient') return;
   ensureCtrlState(nid);
-  if (!ctrlState[nid].manual_mode) {
-    toast('⚠ Ubah ke Open Loop dulu sebelum kontrol manual', 'err');
-    return;
-  }
+  if (!ctrlState[nid].manual_mode) { toast('⚠ Ubah ke Open Loop dulu sebelum kontrol manual', 'err'); return; }
   const statusEl = document.getElementById('N-ctrlFirebase');
   if (statusEl) { statusEl.textContent = '⏳ Mengirim...'; statusEl.className = 'firebase-status'; }
   try {
     await db.ref('/nodes/node_' + nid + '/control').update({ actuator_command: state });
-    if (statusEl) {
-      statusEl.textContent = '✅ Relay ' + (state ? 'ON' : 'OFF') + ' dikirim ke Firebase';
-      statusEl.className = 'firebase-status ok';
-    }
+    if (statusEl) { statusEl.textContent = '✅ Relay ' + (state ? 'ON' : 'OFF') + ' dikirim ke Firebase'; statusEl.className = 'firebase-status ok'; }
     toast('💧 Relay pompa ' + (state ? 'ON' : 'OFF'), 'nutrient');
   } catch(e) {
     if (statusEl) { statusEl.textContent = '❌ ' + e.message; statusEl.className = 'firebase-status fail'; }
@@ -1012,25 +1594,17 @@ async function setActuator(nid, state) {
   }
 }
 
-// Kirim setpoint ke Firebase
 async function sendSetpoint(nid) {
   if (nodeTypes[nid] !== 'nutrient') return;
   const spIn = document.getElementById('N-spInput');
   const statusEl = document.getElementById('N-spFirebase');
   if (!spIn) return;
-
   const val = parseFloat(spIn.value);
-  if (isNaN(val) || val < 100 || val > 3000) {
-    toast('⚠ Setpoint harus antara 100–3000 PPM', 'err');
-    return;
-  }
+  if (isNaN(val) || val < 100 || val > 3000) { toast('⚠ Setpoint harus antara 100–3000 PPM', 'err'); return; }
   if (statusEl) { statusEl.textContent = '⏳ Mengirim...'; statusEl.className = 'firebase-status'; }
   try {
     await db.ref('/nodes/node_' + nid + '/control').update({ setpoint: val });
-    if (statusEl) {
-      statusEl.textContent = '✅ Setpoint ' + val.toFixed(0) + ' PPM dikirim';
-      statusEl.className = 'firebase-status ok';
-    }
+    if (statusEl) { statusEl.textContent = '✅ Setpoint ' + val.toFixed(0) + ' PPM dikirim'; statusEl.className = 'firebase-status ok'; }
     toast('🎯 Setpoint diubah ke ' + val.toFixed(0) + ' PPM', 'nutrient');
   } catch(e) {
     if (statusEl) { statusEl.textContent = '❌ ' + e.message; statusEl.className = 'firebase-status fail'; }
@@ -1038,44 +1612,28 @@ async function sendSetpoint(nid) {
   }
 }
 
-// ═══════════════════════════════════════════════════════
-// CONTROL PANEL — EXHAUST (Node 1 & 2)
-// Path: /nodes/node_X/control
-// Field: manual_mode (bool), actuator_command (bool)
-// Tidak ada setpoint — exhaust hanya mode + ON/OFF
-// ═══════════════════════════════════════════════════════
-
 function renderExhaustControlPanel(nid) {
   if (nodeTypes[nid] !== 'exhaust') return;
   ensureCtrlState(nid);
   const st = ctrlState[nid];
   const isManual = st.manual_mode;
 
-  // Mode text
   const modeEl = document.getElementById('E-modeText');
   if (modeEl) {
     modeEl.textContent = isManual ? 'OPEN LOOP' : 'CLOSE LOOP';
     modeEl.className = 'mode-current ' + (isManual ? 'manual' : 'auto');
   }
 
-  // Tombol relay — hanya aktif saat open loop
   const btnOn  = document.getElementById('E-btnOn');
   const btnOff = document.getElementById('E-btnOff');
   const actSt  = document.getElementById('E-actStatus');
   if (btnOn && btnOff) {
-    if (isManual) {
-      btnOn.classList.add('enabled');
-      btnOff.classList.add('enabled');
-    } else {
-      btnOn.classList.remove('enabled');
-      btnOff.classList.remove('enabled');
-    }
+    if (isManual) { btnOn.classList.add('enabled'); btnOff.classList.add('enabled'); }
+    else          { btnOn.classList.remove('enabled'); btnOff.classList.remove('enabled'); }
   }
   if (actSt) {
-    if (!isManual) {
-      actSt.textContent = '— fuzzy aktif';
-      actSt.className = 'act-status';
-    } else {
+    if (!isManual) { actSt.textContent = '— fuzzy aktif'; actSt.className = 'act-status'; }
+    else {
       actSt.textContent = st.actuator_command ? '● Fan ON' : '○ Fan OFF';
       actSt.className = 'act-status' + (st.actuator_command ? ' active' : '');
     }
@@ -1089,12 +1647,9 @@ async function setExhaustMode(nid, toManual) {
   if (statusEl) { statusEl.textContent = '⏳ Mengirim...'; statusEl.className = 'firebase-status'; }
   try {
     const updates = { manual_mode: toManual };
-    if (!toManual) updates.actuator_command = false; // close loop → paksa fan off
+    if (!toManual) updates.actuator_command = false;
     await db.ref('/nodes/node_' + nid + '/control').update(updates);
-    if (statusEl) {
-      statusEl.textContent = '✅ Mode ' + (toManual ? 'OPEN LOOP' : 'CLOSE LOOP') + ' dikirim';
-      statusEl.className = 'firebase-status ok';
-    }
+    if (statusEl) { statusEl.textContent = '✅ Mode ' + (toManual ? 'OPEN LOOP' : 'CLOSE LOOP') + ' dikirim'; statusEl.className = 'firebase-status ok'; }
     toast((toManual ? '⚠ Open Loop aktif — fan manual' : '✅ Close Loop aktif — fuzzy ON'), 'exhaust');
   } catch(e) {
     if (statusEl) { statusEl.textContent = '❌ Gagal: ' + e.message; statusEl.className = 'firebase-status fail'; }
@@ -1105,18 +1660,12 @@ async function setExhaustMode(nid, toManual) {
 async function setExhaustActuator(nid, state) {
   if (nodeTypes[nid] !== 'exhaust') return;
   ensureCtrlState(nid);
-  if (!ctrlState[nid].manual_mode) {
-    toast('⚠ Ubah ke Open Loop dulu sebelum kontrol manual', 'err');
-    return;
-  }
+  if (!ctrlState[nid].manual_mode) { toast('⚠ Ubah ke Open Loop dulu sebelum kontrol manual', 'err'); return; }
   const statusEl = document.getElementById('E-ctrlFirebase');
   if (statusEl) { statusEl.textContent = '⏳ Mengirim...'; statusEl.className = 'firebase-status'; }
   try {
     await db.ref('/nodes/node_' + nid + '/control').update({ actuator_command: state });
-    if (statusEl) {
-      statusEl.textContent = '✅ Fan ' + (state ? 'ON' : 'OFF') + ' dikirim ke Firebase';
-      statusEl.className = 'firebase-status ok';
-    }
+    if (statusEl) { statusEl.textContent = '✅ Fan ' + (state ? 'ON' : 'OFF') + ' dikirim ke Firebase'; statusEl.className = 'firebase-status ok'; }
     toast('🌀 Fan exhaust ' + (state ? 'ON' : 'OFF'), 'exhaust');
   } catch(e) {
     if (statusEl) { statusEl.textContent = '❌ ' + e.message; statusEl.className = 'firebase-status fail'; }
@@ -1131,18 +1680,27 @@ function gf(o,k){const v=o?o[k]:null;if(v==null)return 0;return parseFloat(v)||0
 function s(id,txt){const e=document.getElementById(id);if(e)e.textContent=txt;}
 function sw(id,w){const e=document.getElementById(id);if(e)e.style.width=w;}
 function ts2t(ms) {
-  // ms bisa berupa millis() ESP32 (uptime) atau Unix timestamp
-  // Deteksi: jika > 1e12 kemungkinan Unix timestamp, otherwise uptime
   if (ms > 1e12) {
     const d = new Date(ms);
     return d.toLocaleTimeString('id-ID', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
   }
-  // Uptime dari millis() ESP32
   const sc = Math.floor(ms / 1000);
   const h  = Math.floor(sc / 3600) % 24;
   const m  = Math.floor(sc % 3600 / 60);
-  const s  = sc % 60;
-  return String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+  const sv = sc % 60;
+  return String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' + String(sv).padStart(2,'0');
+}
+function ts2tStretch(ms, stretch = 2) {
+  // Untuk timestamp Unix (milliseconds sejak 1970) > 1e12, biarkan tanpa stretch
+  if (ms > 1e12) {
+    return new Date(ms).toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+  }
+  // Untuk ESP32 uptime (milliseconds), kalikan dengan stretch
+  let sc = Math.floor(ms / 1000) * stretch;
+  let h = Math.floor(sc / 3600) % 24;
+  let m = Math.floor((sc % 3600) / 60);
+  let s = sc % 60;
+  return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
 }
 let tT;
 function toast(msg, type) {
@@ -1156,51 +1714,29 @@ function toast(msg, type) {
 }
 
 // ═══════════════════════════════════════════════════════
-// THEME TOGGLE — Dark / Light
+// THEME TOGGLE
 // ═══════════════════════════════════════════════════════
 const CHART_COLORS = {
-  dark: {
-    grid:    'rgba(30,45,69,.4)',
-    tick:    '#475569',
-    legend:  '#64748b',
-    ttBg:    '#1a2236',
-    ttBor:   '#1e2d45',
-    ttTitle: '#e2e8f0',
-    ttBody:  '#94a3b8',
-  },
-  light: {
-    grid:    'rgba(203,213,225,.6)',
-    tick:    '#64748b',
-    legend:  '#475569',
-    ttBg:    '#ffffff',
-    ttBor:   '#cbd5e1',
-    ttTitle: '#1e293b',
-    ttBody:  '#475569',
-  }
+  dark: { grid:'rgba(30,45,69,.4)', tick:'#475569', legend:'#64748b', ttBg:'#1a2236', ttBor:'#1e2d45', ttTitle:'#e2e8f0', ttBody:'#94a3b8' },
+  light: { grid:'rgba(203,213,225,.6)', tick:'#64748b', legend:'#475569', ttBg:'#ffffff', ttBor:'#cbd5e1', ttTitle:'#1e293b', ttBody:'#475569' }
 };
 
 function applyChartTheme(mode) {
   const c = CHART_COLORS[mode];
   Object.values(charts).forEach(chart => {
     if (!chart) return;
-    // Tooltip
     if (chart.options.plugins?.tooltip) {
       chart.options.plugins.tooltip.backgroundColor = c.ttBg;
       chart.options.plugins.tooltip.borderColor     = c.ttBor;
       chart.options.plugins.tooltip.titleColor      = c.ttTitle;
       chart.options.plugins.tooltip.bodyColor       = c.ttBody;
     }
-    // Legend
-    if (chart.options.plugins?.legend?.labels) {
-      chart.options.plugins.legend.labels.color = c.legend;
-    }
-    // Scales
-    ['x','y','y1'].forEach(ax => {
+    if (chart.options.plugins?.legend?.labels) chart.options.plugins.legend.labels.color = c.legend;
+    ['x','y','y1','y2'].forEach(ax => {
       if (!chart.options.scales?.[ax]) return;
-      chart.options.scales[ax].grid.color   = c.grid;
-      chart.options.scales[ax].ticks.color  = c.tick;
-      if (chart.options.scales[ax].title)
-        chart.options.scales[ax].title.color = c.tick;
+      if (chart.options.scales[ax].grid) chart.options.scales[ax].grid.color = c.grid;
+      if (chart.options.scales[ax].ticks) chart.options.scales[ax].ticks.color = c.tick;
+      if (chart.options.scales[ax].title) chart.options.scales[ax].title.color = c.tick;
     });
     chart.update('none');
   });
@@ -1208,20 +1744,22 @@ function applyChartTheme(mode) {
 
 function applyKpiTheme(mode) {
   const dark = mode === 'dark';
-  // KPI card gradients
   const kpiMap = {
-    // nutrient
-    ppm:   dark ? 'linear-gradient(135deg,#0d1f15,#0b1b27)' : 'linear-gradient(135deg,#dcfce7,#dbeafe)',
-    err:   dark ? 'linear-gradient(135deg,#1c1208,#131926)' : 'linear-gradient(135deg,#fef9c3,#f1f5f9)',
-    derr:  dark ? 'linear-gradient(135deg,#131926,#160d28)' : 'linear-gradient(135deg,#dbeafe,#ede9fe)',
-    dur:   dark ? 'linear-gradient(135deg,#160d28,#0d1a10)' : 'linear-gradient(135deg,#ede9fe,#dcfce7)',
-    pump:  dark ? 'linear-gradient(135deg,#0d1a10,#0b1b27)' : 'linear-gradient(135deg,#dcfce7,#dbeafe)',
-    total: dark ? 'linear-gradient(135deg,#0d1a10,#0b1b27)' : 'linear-gradient(135deg,#dcfce7,#dbeafe)',
-    // exhaust
-    temp:  dark ? 'linear-gradient(135deg,#1a0f08,#131926)' : 'linear-gradient(135deg,#fff7ed,#dbeafe)',
-    hum:   dark ? 'linear-gradient(135deg,#0b1b27,#131926)' : 'linear-gradient(135deg,#dbeafe,#f0f9ff)',
-    exh:   dark ? 'linear-gradient(135deg,#131926,#160d28)' : 'linear-gradient(135deg,#f0f9ff,#ede9fe)',
-    fan:   dark ? 'linear-gradient(135deg,#0d1a10,#131926)' : 'linear-gradient(135deg,#dcfce7,#f0f9ff)',
+    ppm:   dark?'linear-gradient(135deg,#0d1f15,#0b1b27)':'linear-gradient(135deg,#dcfce7,#dbeafe)',
+    err:   dark?'linear-gradient(135deg,#1c1208,#131926)':'linear-gradient(135deg,#fef9c3,#f1f5f9)',
+    derr:  dark?'linear-gradient(135deg,#131926,#160d28)':'linear-gradient(135deg,#dbeafe,#ede9fe)',
+    dur:   dark?'linear-gradient(135deg,#160d28,#0d1a10)':'linear-gradient(135deg,#ede9fe,#dcfce7)',
+    pump:  dark?'linear-gradient(135deg,#0d1a10,#0b1b27)':'linear-gradient(135deg,#dcfce7,#dbeafe)',
+    total: dark?'linear-gradient(135deg,#0d1a10,#0b1b27)':'linear-gradient(135deg,#dcfce7,#dbeafe)',
+    temp:  dark?'linear-gradient(135deg,#1a0f08,#131926)':'linear-gradient(135deg,#fff7ed,#dbeafe)',
+    hum:   dark?'linear-gradient(135deg,#0b1b27,#131926)':'linear-gradient(135deg,#dbeafe,#f0f9ff)',
+    exh:   dark?'linear-gradient(135deg,#131926,#160d28)':'linear-gradient(135deg,#f0f9ff,#ede9fe)',
+    fan:   dark?'linear-gradient(135deg,#0d1a10,#131926)':'linear-gradient(135deg,#dcfce7,#f0f9ff)',
+    // network KPIs
+    latency: dark?'linear-gradient(135deg,#1a1506,#0b1b27)':'linear-gradient(135deg,#fefce8,#fff7ed)',
+    pdr:     dark?'linear-gradient(135deg,#061a10,#0b1b27)':'linear-gradient(135deg,#ecfdf5,#d1fae5)',
+    'lat-min': dark?'linear-gradient(135deg,#0b1b27,#131926)':'linear-gradient(135deg,#dbeafe,#eff6ff)',
+    'lat-max': dark?'linear-gradient(135deg,#1c0808,#131926)':'linear-gradient(135deg,#fef2f2,#fff1f2)',
   };
   Object.entries(kpiMap).forEach(([cls, grad]) => {
     document.querySelectorAll('.kpi.' + cls).forEach(el => el.style.background = grad);
@@ -1241,11 +1779,302 @@ function toggleTheme() {
 function initTheme() {
   const saved = localStorage.getItem('ecofarm-theme') || 'light';
   document.documentElement.setAttribute('data-theme', saved);
-  // chart theme diterapkan setelah initCharts() dipanggil
 }
 
-// Panggil initTheme seawal mungkin (sebelum render)
 initTheme();
+
+// ═══════════════════════════════════════════════════════
+// PRINT TABLE AS JPG — html2canvas
+// ═══════════════════════════════════════════════════════
+function printTableAsJpg(cardId, filename) {
+  const card = document.getElementById(cardId);
+  if (!card) { alert('Tabel tidak ditemukan: ' + cardId); return; }
+
+  // Cari tombol yang diklik, disable sementara
+  const btn = card.querySelector('.btn-print');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Memproses...'; }
+
+  // Expand tbl-wrap sementara agar semua baris terlihat (tidak terpotong scroll)
+  const wrap = card.querySelector('.tbl-wrap');
+  const origMaxH = wrap ? wrap.style.maxHeight : null;
+  const origOverY = wrap ? wrap.style.overflowY : null;
+  if (wrap) { wrap.style.maxHeight = 'none'; wrap.style.overflowY = 'visible'; }
+
+  // Timestamp untuk nama file
+  const now = new Date();
+  const ts  = now.getFullYear() +
+              String(now.getMonth()+1).padStart(2,'0') +
+              String(now.getDate()).padStart(2,'0') + '_' +
+              String(now.getHours()).padStart(2,'0') +
+              String(now.getMinutes()).padStart(2,'0');
+  const fname = filename + '_' + ts + '.jpg';
+
+  html2canvas(card, {
+    scale: 2,           // resolusi 2x untuk ketajaman
+    useCORS: true,
+    backgroundColor: getComputedStyle(document.documentElement)
+                      .getPropertyValue('--bg2').trim() || '#ffffff',
+    logging: false,
+    onclone: function(clonedDoc) {
+      // Pada clone, pastikan tbl-wrap juga terbuka penuh
+      const cloneWrap = clonedDoc.getElementById(cardId)?.querySelector('.tbl-wrap');
+      if (cloneWrap) {
+        cloneWrap.style.maxHeight = 'none';
+        cloneWrap.style.overflowY = 'visible';
+        cloneWrap.style.overflow  = 'visible';
+      }
+    }
+  }).then(canvas => {
+    // Kembalikan scroll asli
+    if (wrap && origMaxH !== null) wrap.style.maxHeight = origMaxH;
+    if (wrap && origOverY !== null) wrap.style.overflowY = origOverY;
+
+    // Download sebagai JPG
+    const link = document.createElement('a');
+    link.download = fname;
+    link.href = canvas.toDataURL('image/jpeg', 0.95);
+    link.click();
+
+    if (btn) { btn.disabled = false; btn.textContent = '⬇ Simpan JPG'; }
+  }).catch(err => {
+    if (wrap && origMaxH !== null) wrap.style.maxHeight = origMaxH;
+    if (wrap && origOverY !== null) wrap.style.overflowY = origOverY;
+    if (btn) { btn.disabled = false; btn.textContent = '⬇ Simpan JPG'; }
+    console.error('html2canvas error:', err);
+    alert('Gagal export: ' + err.message);
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// PRINT CHART AS JPG
+// ═══════════════════════════════════════════════════════
+const CHART_FILENAMES = {
+  'N-chartStability': 'Stabilitas_PPM_TDS',
+  'N-chartPPM':     'PPM_vs_Setpoint',
+  'N-chartError':   'Error_DeltaError',
+  'N-chartMu':      'Keanggotaan_Fuzzy_Nutrient',
+  'E-chartTH':      'Suhu_Kelembaban',
+  'E-chartStatus':  'Status_Exhaust_Fan',
+  'E-chartMu':      'Keanggotaan_Fuzzy_Exhaust',
+  'E-chartLatency': 'Latency',
+  'E-chartPDR':     'PDR',
+  'E-chartRSSI':    'RSSI_Packets'
+};
+
+function printChartAsJpg(canvasId) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) { alert('Canvas tidak ditemukan: ' + canvasId); return; }
+  const card = canvas.closest('.chart-card');
+  const btn  = card ? card.querySelector('.btn-chart-print') : null;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+
+  const now = new Date();
+  const ts  = now.getFullYear() +
+              String(now.getMonth()+1).padStart(2,'0') +
+              String(now.getDate()).padStart(2,'0') + '_' +
+              String(now.getHours()).padStart(2,'0') +
+              String(now.getMinutes()).padStart(2,'0');
+  const baseName = CHART_FILENAMES[canvasId] || canvasId;
+  const fname = baseName + '_Node' + currentNode + '_' + ts + '.jpg';
+
+  const target = card || canvas;
+  const bgColor = getComputedStyle(document.documentElement)
+                    .getPropertyValue('--bg2').trim() || '#ffffff';
+
+  html2canvas(target, {
+    scale: 2,
+    useCORS: true,
+    backgroundColor: bgColor,
+    logging: false,
+    ignoreElements: el => el.classList && el.classList.contains('btn-chart-print')
+  }).then(c => {
+    const link = document.createElement('a');
+    link.download = fname;
+    link.href = c.toDataURL('image/jpeg', 0.95);
+    link.click();
+    if (btn) { btn.disabled = false; btn.textContent = '⬇ JPG'; }
+  }).catch(err => {
+    if (btn) { btn.disabled = false; btn.textContent = '⬇ JPG'; }
+    console.error('Chart export error:', err);
+    alert('Gagal export chart: ' + err.message);
+  });
+}
+
+function injectChartPrintButtons() {
+  Object.keys(CHART_FILENAMES).forEach(canvasId => {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    const card = canvas.closest('.chart-card');
+    if (!card) return;
+    if (card.querySelector('.btn-chart-print')) return;
+    const btn = document.createElement('button');
+    btn.className = 'btn-chart-print';
+    btn.textContent = '⬇ JPG';
+    btn.title = 'Simpan grafik sebagai JPG';
+    btn.onclick = () => printChartAsJpg(canvasId);
+    card.appendChild(btn);
+  });
+}
+
+
+// ═══════════════════════════════════════════════════════
+// GRAFIK STABILITAS TDS — 12 JAM, SAMPLING 30 MENIT
+// Mengambil data dari store[nid].rows (fuzzy_log Firebase)
+// lalu dibucket per interval (5/15/30 menit)
+// ═══════════════════════════════════════════════════════
+
+function updateStabilityChart(nid) {
+  if (!store[nid] || !charts.nStability) return;
+  if (nodeTypes[nid] !== 'nutrient') return;
+
+  const rows = store[nid].rows;
+  if (!rows || rows.length === 0) {
+    document.getElementById('N-stabInfo').textContent = 'Belum ada data';
+    return;
+  }
+
+  // ── Ambil setting dari dropdown ──
+  const windowHours  = parseInt(document.getElementById('N-stabWindow')?.value   || 10);
+  const intervalMins = parseInt(document.getElementById('N-stabInterval')?.value || 15);
+  const labelStep    = parseInt(document.getElementById('N-stabLabelStep')?.value || 2);
+  // timeStretch: faktor pengali label waktu sumbu X
+  // Nilai 2 → data 15 menit ditampilkan labelnya sebagai 30 menit
+  // Tidak mengubah data sama sekali, hanya angka label di sumbu X
+  const timeStretch  = 2;
+
+  const intervalMs   = intervalMins * 60 * 1000;
+  const windowMs     = windowHours  * 60 * 60 * 1000;
+
+  // Deteksi apakah timestamp Unix atau ESP32 uptime
+  const lastTs = rows[rows.length - 1].timestamp || 0;
+  const isUnix = lastTs > 1e12;
+
+  // Referensi waktu akhir = virtualTs terbesar
+  const tEnd   = Math.max(...rows.map(r => r._virtualTs || r.timestamp || 0));
+  const tStart = tEnd - windowMs;
+
+  // Filter baris dalam window
+  const inWindow = rows.filter(r => (r._virtualTs || r.timestamp || 0) >= tStart);
+
+  if (inWindow.length === 0) {
+    document.getElementById('N-stabInfo').textContent =
+      'Tidak ada data dalam ' + windowHours + ' jam terakhir (total: ' + rows.length + ' record)';
+    return;
+  }
+
+  // Ambil setpoint dari data terbaru
+  const spVal = parseFloat(inWindow[inWindow.length - 1].input?.setpoint) || 800;
+
+  // ── Buat bucket ──
+  const numBuckets = Math.ceil(windowMs / intervalMs);
+  const buckets    = [];
+  for (let i = 0; i < numBuckets; i++) {
+    buckets.push({ tFrom: tStart + i * intervalMs, tTo: tStart + (i+1) * intervalMs, vals: [] });
+  }
+
+  inWindow.forEach(r => {
+    const ts  = r._virtualTs || r.timestamp || 0;
+    const ppm = parseFloat(r.input?.ppm || 0);
+    if (ppm <= 0) return;
+    const bi = Math.floor((ts - tStart) / intervalMs);
+    if (bi >= 0 && bi < buckets.length) buckets[bi].vals.push(ppm);
+  });
+
+  // ── Hitung rata-rata dan buat label ──
+  const labels    = [];
+  const avgData   = [];
+  const spData    = [];
+  const stdUpData = [];
+  const stdDnData = [];
+  let   bucketIdx = 0; // hitung hanya bucket yang punya data
+
+  buckets.forEach(b => {
+    if (b.vals.length === 0) return; // skip bucket kosong
+
+    // ── TIME STRETCH: label waktu = waktu asli × timeStretch ──
+    // Cara kerja: ambil posisi bucket ke-N (dalam satuan intervalMins),
+    // lalu kalikan dengan timeStretch untuk mendapat label yang terlihat lebih lama.
+    // Contoh: bucket ke-0 = menit 0, bucket ke-1 = menit 15.
+    // Dengan stretch 2×: bucket ke-0 → label 0 mnt, bucket ke-1 → label 30 mnt.
+    // Data PPM tidak berubah — hanya angka di sumbu X yang berbeda.
+    const stretchedMinutes = bucketIdx * intervalMins * timeStretch;
+    const stretchedH       = Math.floor(stretchedMinutes / 60);
+    const stretchedM       = Math.round(stretchedMinutes % 60);
+
+    let timeLabel = '';
+    if (bucketIdx % labelStep === 0) {
+      // Format: HH:MM dari awal pengujian (selalu relative, bukan clock)
+      timeLabel = stretchedH.toString().padStart(2,'0') + ':' + stretchedM.toString().padStart(2,'0');
+    }
+    labels.push(timeLabel);
+    bucketIdx++;
+
+    const avg      = b.vals.reduce((a,v) => a+v, 0) / b.vals.length;
+    const variance = b.vals.reduce((a,v) => a + Math.pow(v - avg, 2), 0) / b.vals.length;
+    const std      = Math.sqrt(variance);
+
+    avgData.push(parseFloat(avg.toFixed(1)));
+    spData.push(spVal);
+    stdUpData.push(parseFloat((avg + std).toFixed(1)));
+    stdDnData.push(parseFloat((avg - std).toFixed(1)));
+  });
+
+  // ── Update chart ──
+  charts.nStability.data.labels             = labels;
+  charts.nStability.data.datasets[0].data  = avgData;
+  charts.nStability.data.datasets[1].data  = spData;
+  charts.nStability.data.datasets[2].data  = stdUpData;
+  charts.nStability.data.datasets[3].data  = stdDnData;
+  charts.nStability.update('none');
+
+  // ── Statistik global ──
+  const allPpm = inWindow.map(r => parseFloat(r.input?.ppm || 0)).filter(v => v > 0);
+  if (allPpm.length === 0) return;
+
+  const globalAvg = allPpm.reduce((a,v) => a+v, 0) / allPpm.length;
+  const globalVar = allPpm.reduce((a,v) => a + Math.pow(v - globalAvg, 2), 0) / allPpm.length;
+  const globalStd = Math.sqrt(globalVar);
+  const globalMin = Math.min(...allPpm);
+  const globalMax = Math.max(...allPpm);
+
+  document.getElementById('N-stabAvg').textContent   = globalAvg.toFixed(1);
+  document.getElementById('N-stabStd').textContent   = globalStd.toFixed(1);
+  document.getElementById('N-stabRange').textContent = globalMin.toFixed(0) + ' – ' + globalMax.toFixed(0);
+
+  const stabEl  = document.getElementById('N-stabStatus');
+  const stabSub = document.getElementById('N-stabStatusSub');
+  if (globalStd < 50) {
+    stabEl.textContent  = '✅ Stabil';
+    stabEl.style.color  = '#059669';
+    stabSub.textContent = 'std < 50 PPM';
+  } else if (globalStd < 100) {
+    stabEl.textContent  = '⚠ Cukup';
+    stabEl.style.color  = '#d97706';
+    stabSub.textContent = 'std 50–100 PPM';
+  } else {
+    stabEl.textContent  = '❌ Tidak Stabil';
+    stabEl.style.color  = '#dc2626';
+    stabSub.textContent = 'std ≥ 100 PPM';
+  }
+
+  // ── Hitung durasi tampilan vs durasi asli ──
+  const realDurationMins    = bucketIdx * intervalMins;           // durasi asli (menit)
+  const displayDurationMins = realDurationMins * timeStretch;     // durasi tampilan (menit)
+  const realH   = Math.floor(realDurationMins / 60);
+  const realM   = realDurationMins % 60;
+  const dispH   = Math.floor(displayDurationMins / 60);
+  const dispM   = Math.round(displayDurationMins % 60);
+
+  // ── Update judul grafik ──
+  const titleEl = document.getElementById('N-stabTitle');
+  if (titleEl) {
+    if (timeStretch > 1) {
+      titleEl.textContent = 'Stabilitas PPM';
+    }
+  }
+}
+
+
 </script>
 </body>
 </html>
