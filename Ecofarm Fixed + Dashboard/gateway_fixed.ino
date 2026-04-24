@@ -19,8 +19,8 @@ IPAddress ap_local_ip(192, 168, 4, 1);
 IPAddress ap_gateway(192, 168, 4, 1);
 IPAddress ap_subnet(255, 255, 255, 0);
 
-#define FIREBASE_HOST "ecofarm-iot-default-rtdb.asia-southeast1.firebasedatabase.app"
-#define FIREBASE_AUTH "AIzaSyBiLEHEnkXjI-0vq0p4A8e150okyswNggY"
+#define FIREBASE_HOST "projectecofarm-98727-default-rtdb.asia-southeast1.firebasedatabase.app"
+#define FIREBASE_AUTH "z2fgLdOr7LsdHq9yNUGKhbxuGVfy6GPeuKsbFDyY"
 
 #define NUM_NODES 4
 
